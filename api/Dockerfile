@@ -27,7 +27,8 @@ COPY api/providers ./providers
 COPY dify-agent/pyproject.toml dify-agent/README.md /app/dify-agent/
 COPY dify-agent/src /app/dify-agent/src
 # Trust the checked-in lock during image builds; local path sources are copied from the repository context.
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable \
+    && uv pip install --python /app/api/.venv/bin/python --no-deps /app/api/providers/vdb/vdb-oceanbase
 
 # production stage
 FROM base AS production
