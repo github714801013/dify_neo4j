@@ -35,7 +35,7 @@ from libs import helper
 from libs.datetime_utils import naive_utc_now
 from libs.login import current_user
 from libs.pagination import paginate_query
-from models import Account, TenantAccountRole, DatasetGraphConfig
+from models import Account, DatasetGraphConfig, TenantAccountRole
 from models.dataset import (
     AppDatasetJoin,
     ChildChunk,
@@ -3020,7 +3020,6 @@ class DocumentService:
                     else None,
                 )
             )
-
 
         documents, batch = DocumentService.save_document_with_dataset_id(
             dataset, knowledge_config, account, session=session
