@@ -1,12 +1,13 @@
 import type { DefaultModel, Model } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import type { NotionPage } from '@/models/common'
-import type { ChunkingMode, CrawlOptions, CrawlResultItem, CreateDocumentReq, createDocumentResponse, CustomFile, FullDocumentDetail, ProcessRule, SummaryIndexSetting as SummaryIndexSettingType } from '@/models/datasets'
+import type { ChunkingMode, CrawlOptions, CrawlResultItem, CreateDocumentReq, createDocumentResponse, CustomFile, FullDocumentDetail, GraphRagConfig, ProcessRule, SummaryIndexSetting as SummaryIndexSettingType } from '@/models/datasets'
 import type { RetrievalConfig, RETRIEVE_METHOD } from '@/types/app'
 import { toast } from '@langgenius/dify-ui/toast'
 import { useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { trackEvent } from '@/app/components/base/amplitude'
 import { isReRankModelSelected } from '@/app/components/datasets/common/check-rerank-model'
+import { validateGraphRagConfig } from '@/app/components/datasets/graph-rag/validation'
 import { DataSourceProvider } from '@/models/common'
 import { DataSourceType } from '@/models/datasets'
 import { getNotionInfo, getWebsiteInfo, useCreateDocument, useCreateFirstDocument } from '@/service/knowledge/use-create-dataset'
@@ -44,6 +45,8 @@ type ValidationParams = {
   embeddingModel: DefaultModel
   rerankModelList: Model[]
   retrievalConfig: RetrievalConfig
+  graphRagConfig?: GraphRagConfig
+  graphRagModelList?: Model[]
 }
 export const useDocumentCreation = (options: UseDocumentCreationOptions) => {
   const { t } = useTranslation()
@@ -54,7 +57,14 @@ export const useDocumentCreation = (options: UseDocumentCreationOptions) => {
   const isCreating = createFirstDocumentMutation.isPending || createDocumentMutation.isPending
   // Validate creation params
   const validateParams = useCallback((params: ValidationParams): boolean => {
-    const { segmentationType, maxChunkLength, limitMaxChunkLength, overlap, indexType, embeddingModel, rerankModelList, retrievalConfig } = params
+    const { segmentationType, maxChunkLength, limitMaxChunkLength, overlap, indexType, embeddingModel, rerankModelList, retrievalConfig, graphRagConfig, graphRagModelList } = params
+    if (graphRagConfig) {
+      const graphRagValidationError = validateGraphRagConfig(graphRagConfig, graphRagModelList ?? [])
+      if (graphRagValidationError) {
+        toast.error(t(`form.graphRag.${graphRagValidationError}`, { ns: 'datasetSettings' }))
+        return false
+      }
+    }
     if (segmentationType === 'general' && overlap > maxChunkLength) {
       toast.error(t('stepTwo.overlapCheck', { ns: 'datasetCreation' }))
       return false
@@ -80,7 +90,7 @@ export const useDocumentCreation = (options: UseDocumentCreationOptions) => {
     return true
   }, [t, isSetting])
   // Build creation params
-  const buildCreationParams = useCallback((currentDocForm: ChunkingMode, docLanguage: string, processRule: ProcessRule, retrievalConfig: RetrievalConfig, embeddingModel: DefaultModel, indexingTechnique: string, summaryIndexSetting?: SummaryIndexSettingType): CreateDocumentReq | null => {
+  const buildCreationParams = useCallback((currentDocForm: ChunkingMode, docLanguage: string, processRule: ProcessRule, retrievalConfig: RetrievalConfig, embeddingModel: DefaultModel, indexingTechnique: string, summaryIndexSetting?: SummaryIndexSettingType, graphRagConfig?: GraphRagConfig): CreateDocumentReq | null => {
     if (isSetting) {
       return {
         original_document_id: documentDetail?.id,
@@ -104,6 +114,7 @@ export const useDocumentCreation = (options: UseDocumentCreationOptions) => {
       indexing_technique: indexingTechnique,
       process_rule: processRule,
       summary_index_setting: summaryIndexSetting,
+      graph_rag_config: graphRagConfig,
       doc_form: currentDocForm,
       doc_language: docLanguage,
       retrieval_model: retrievalConfig,

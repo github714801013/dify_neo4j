@@ -53,10 +53,13 @@ const Form = () => {
     embeddingModel,
     setEmbeddingModel,
     embeddingModelList,
+    textGenerationModelList,
 
     // Summary index
     summaryIndexSetting,
     handleSummaryIndexSettingChange,
+    graphRagConfig,
+    setGraphRagConfig,
 
     // Computed
     showMultiModalTip,
@@ -110,10 +113,13 @@ const Form = () => {
               embeddingModel={embeddingModel}
               setEmbeddingModel={setEmbeddingModel}
               embeddingModelList={embeddingModelList}
+              textGenerationModelList={textGenerationModelList}
               retrievalConfig={retrievalConfig}
               setRetrievalConfig={setRetrievalConfig}
               summaryIndexSetting={summaryIndexSetting}
               handleSummaryIndexSettingChange={handleSummaryIndexSettingChange}
+              graphRagConfig={graphRagConfig}
+              setGraphRagConfig={setGraphRagConfig}
               showMultiModalTip={showMultiModalTip}
               readonly={readonly}
             />

@@ -271,6 +271,8 @@ class DatasetDetailResponse(ResponseModel):
     is_multimodal: bool
     permission_keys: list[str] = Field(default_factory=list)
     maintainer: str | None = None
+    graph_rag_enabled: bool = False
+    graph_rag_config: dict | None = None
 
     @field_validator("created_at", "updated_at", mode="before")
     @classmethod

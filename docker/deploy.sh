@@ -45,7 +45,22 @@ BUILDKIT_REGISTRY_MIRROR="${BUILDKIT_REGISTRY_MIRROR:-}"
 BUILDKIT_PROGRESS="${BUILDKIT_PROGRESS:-plain}"
 BUILD_RETRIES="${BUILD_RETRIES:-3}"
 PLATFORM="${PLATFORM:-linux/amd64}"
+UV_INDEX_URL="${UV_INDEX_URL:-}"
+NPM_CONFIG_REGISTRY="${NPM_CONFIG_REGISTRY:-}"
 DB_PLUGIN_DATABASE="${DB_PLUGIN_DATABASE:-${DB_DATABASE}}"
+APP_MAX_EXECUTION_TIME="${APP_MAX_EXECUTION_TIME:-3600}"
+WORKFLOW_MAX_EXECUTION_TIME="${WORKFLOW_MAX_EXECUTION_TIME:-3600}"
+GRAPH_RAG_ENABLED="${GRAPH_RAG_ENABLED:-false}"
+GRAPH_RAG_FAIL_OPEN="${GRAPH_RAG_FAIL_OPEN:-true}"
+GRAPH_RAG_DEFAULT_TIMEOUT_MS="${GRAPH_RAG_DEFAULT_TIMEOUT_MS:-1500}"
+NEO4J_URI="${NEO4J_URI:-}"
+NEO4J_USERNAME="${NEO4J_USERNAME:-}"
+NEO4J_PASSWORD="${NEO4J_PASSWORD:-}"
+NEO4J_DATABASE="${NEO4J_DATABASE:-}"
+GRAPH_INDEX_WORKER_CONCURRENCY="${GRAPH_INDEX_WORKER_CONCURRENCY:-2}"
+GRAPH_INDEX_MAX_RETRIES="${GRAPH_INDEX_MAX_RETRIES:-5}"
+GRAPH_INDEX_RETRY_BASE_SECONDS="${GRAPH_INDEX_RETRY_BASE_SECONDS:-30}"
+GRAPH_RECONCILE_INTERVAL_MINUTES="${GRAPH_RECONCILE_INTERVAL_MINUTES:-30}"
 REMOTE_IMAGE_TAR="${REMOTE_IMAGE_TAR:-${REMOTE_DIR}/dify-origin-images-${IMAGE_TAG}.tar}"
 LOCAL_IMAGE_TAR="${LOCAL_IMAGE_TAR:-$(mktemp -u -t "dify-origin-images-${IMAGE_TAG}.XXXXXX.tar")}"
 
@@ -70,17 +85,6 @@ ensure_builder() {
   )
   local config_args=()
   local buildkit_config=""
-
-  if [ -n "${HTTP_PROXY:-}" ]; then
-    if [ "${BUILDKIT_DAEMON_PROXY:-0}" = "1" ]; then
-      driver_opts+=(--driver-opt "env.HTTP_PROXY=${HTTP_PROXY}")
-    fi
-  fi
-  if [ -n "${HTTPS_PROXY:-}" ]; then
-    if [ "${BUILDKIT_DAEMON_PROXY:-0}" = "1" ]; then
-      driver_opts+=(--driver-opt "env.HTTPS_PROXY=${HTTPS_PROXY}")
-    fi
-  fi
 
   if [ -n "${BUILDKIT_REGISTRY_MIRROR}" ]; then
     buildkit_config="$(mktemp -t dify-buildkitd.XXXXXX.toml)"
@@ -114,23 +118,30 @@ build_image() {
   local commit_sha="$3"
   local attempt=1
   local build_args=(--build-arg "COMMIT_SHA=${commit_sha}")
+  local output_tar
+  output_tar="$(mktemp -t 'dify-build-image.XXXXXX.tar')"
+  rm -f "${output_tar}"
 
-  if [ -n "${HTTP_PROXY:-}" ]; then
-    build_args+=(--build-arg "HTTP_PROXY=${HTTP_PROXY}" --build-arg "http_proxy=${HTTP_PROXY}")
+  if [ -n "${UV_INDEX_URL}" ]; then
+    build_args+=(--build-arg "UV_INDEX_URL=${UV_INDEX_URL}")
   fi
-  if [ -n "${HTTPS_PROXY:-}" ]; then
-    build_args+=(--build-arg "HTTPS_PROXY=${HTTPS_PROXY}" --build-arg "https_proxy=${HTTPS_PROXY}")
-  fi
-  if [ -n "${NO_PROXY:-}" ]; then
-    build_args+=(--build-arg "NO_PROXY=${NO_PROXY}" --build-arg "no_proxy=${NO_PROXY}")
+  if [ -n "${NPM_CONFIG_REGISTRY}" ]; then
+    build_args+=(--build-arg "NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY}")
   fi
 
   while true; do
     if env -u HTTP_PROXY -u HTTPS_PROXY -u NO_PROXY -u http_proxy -u https_proxy -u no_proxy \
-      docker buildx build --builder "${BUILDER_NAME}" --platform "${PLATFORM}" --network "${BUILDKIT_BUILD_NETWORK}" --progress "${BUILDKIT_PROGRESS}" --load \
+      docker buildx build --builder "${BUILDER_NAME}" --platform "${PLATFORM}" --network "${BUILDKIT_BUILD_NETWORK}" --progress "${BUILDKIT_PROGRESS}" --output "type=docker,dest=${output_tar}" \
       -f "${dockerfile}" "${build_args[@]}" -t "${image}" .; then
-      return
+      if docker load -i "${output_tar}" >/dev/null; then
+        rm -f "${output_tar}"
+        return
+      fi
     fi
+
+    rm -f "${output_tar}"
+    output_tar="$(mktemp -t 'dify-build-image.XXXXXX.tar')"
+    rm -f "${output_tar}"
 
     if [ "${attempt}" -ge "${BUILD_RETRIES}" ]; then
       echo "镜像构建失败: ${image}" >&2
@@ -181,6 +192,19 @@ SQLALCHEMY_POOL_PRE_PING=${SQLALCHEMY_POOL_PRE_PING:-false}
 SERVER_WORKER_AMOUNT=${SERVER_WORKER_AMOUNT:-1}
 SERVER_WORKER_CONNECTIONS=${SERVER_WORKER_CONNECTIONS:-10}
 GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-200}
+APP_MAX_EXECUTION_TIME=${APP_MAX_EXECUTION_TIME}
+WORKFLOW_MAX_EXECUTION_TIME=${WORKFLOW_MAX_EXECUTION_TIME}
+GRAPH_RAG_ENABLED=${GRAPH_RAG_ENABLED}
+GRAPH_RAG_FAIL_OPEN=${GRAPH_RAG_FAIL_OPEN}
+GRAPH_RAG_DEFAULT_TIMEOUT_MS=${GRAPH_RAG_DEFAULT_TIMEOUT_MS}
+NEO4J_URI=${NEO4J_URI}
+NEO4J_USERNAME=${NEO4J_USERNAME}
+NEO4J_PASSWORD=${NEO4J_PASSWORD}
+NEO4J_DATABASE=${NEO4J_DATABASE}
+GRAPH_INDEX_WORKER_CONCURRENCY=${GRAPH_INDEX_WORKER_CONCURRENCY}
+GRAPH_INDEX_MAX_RETRIES=${GRAPH_INDEX_MAX_RETRIES}
+GRAPH_INDEX_RETRY_BASE_SECONDS=${GRAPH_INDEX_RETRY_BASE_SECONDS}
+GRAPH_RECONCILE_INTERVAL_MINUTES=${GRAPH_RECONCILE_INTERVAL_MINUTES}
 REDIS_HOST=${REDIS_HOST}
 REDIS_PORT=${REDIS_PORT}
 REDIS_USERNAME=${REDIS_USERNAME:-}
@@ -260,6 +284,7 @@ services:
     env_file: [./.env]
     environment:
       MODE: api
+      INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
     depends_on:
       init_permissions:
         condition: service_completed_successfully
@@ -285,6 +310,7 @@ services:
     env_file: [./.env]
     environment:
       MODE: worker
+      INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
     depends_on:
       init_permissions:
         condition: service_completed_successfully

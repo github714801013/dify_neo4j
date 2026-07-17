@@ -49,6 +49,25 @@ export type SummaryIndexSetting = {
   summary_prompt?: string
 }
 
+export type GraphExtractModelConfig = {
+  provider: string
+  model: string
+  temperature: number
+  max_triplets_per_chunk: number
+  strict: boolean
+}
+
+export type GraphRagConfig = {
+  enabled: boolean
+  query_mode: 'vector' | 'hybrid'
+  graph_top_k: number
+  graph_max_depth: number
+  graph_timeout_ms: number
+  graph_weight: number
+  extract_model_config: GraphExtractModelConfig | null
+  graph_version: string
+}
+
 export type DataSet = {
   id: string
   name: string
@@ -99,6 +118,8 @@ export type DataSet = {
   summary_index_setting?: SummaryIndexSetting
   /** ACL permission keys */
   permission_keys?: string[]
+  graph_rag_enabled?: boolean
+  graph_rag_config?: GraphRagConfig
 }
 
 export type ExternalAPIItem = {
@@ -447,6 +468,7 @@ export type CreateDocumentReq = DocumentReq & {
   retrieval_model: RetrievalConfig
   embedding_model: string
   embedding_model_provider: string
+  graph_rag_config?: GraphRagConfig
 }
 
 export type IndexingEstimateParams = DocumentReq & Partial<DataSource> & {

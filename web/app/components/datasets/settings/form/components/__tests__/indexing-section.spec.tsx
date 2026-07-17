@@ -254,10 +254,22 @@ describe('IndexingSection', () => {
     embeddingModel: mockEmbeddingModel,
     setEmbeddingModel: vi.fn(),
     embeddingModelList: mockEmbeddingModelList,
+    textGenerationModelList: mockEmbeddingModelList,
     retrievalConfig: mockRetrievalConfig,
     setRetrievalConfig: vi.fn(),
     summaryIndexSetting: mockSummaryIndexSetting,
     handleSummaryIndexSettingChange: vi.fn(),
+    graphRagConfig: {
+      enabled: false,
+      query_mode: 'hybrid' as const,
+      graph_top_k: 10,
+      graph_max_depth: 1,
+      graph_timeout_ms: 1500,
+      graph_weight: 0.3,
+      extract_model_config: null,
+      graph_version: 'v1',
+    },
+    setGraphRagConfig: vi.fn(),
     showMultiModalTip: false,
   }
 
@@ -278,13 +290,15 @@ describe('IndexingSection', () => {
       expect(screen.getByText('form.indexMethod')).toBeInTheDocument()
       expect(screen.getByTestId('index-method')).toBeInTheDocument()
       expect(screen.getByText('form.retrievalSetting.title')).toBeInTheDocument()
+      expect(screen.getByRole('switch', { name: 'form.graphRag.title' })).toBeInTheDocument()
+      expect(screen.getAllByTestId('model-selector')).toHaveLength(2)
     })
 
     it('should render the embedding model selector when the index method is high quality', () => {
       renderComponent()
 
       expect(screen.getByText('form.embeddingModel')).toBeInTheDocument()
-      expect(screen.getByTestId('model-selector')).toHaveAttribute('data-model', 'text-embedding-ada-002')
+      expect(screen.getAllByTestId('model-selector')[0]).toHaveAttribute('data-model', 'text-embedding-ada-002')
     })
   })
 
@@ -381,14 +395,14 @@ describe('IndexingSection', () => {
       renderComponent({ indexMethod: IndexingType.ECONOMICAL })
 
       expect(screen.queryByText('form.embeddingModel')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('model-selector')).not.toBeInTheDocument()
+      expect(screen.getAllByTestId('model-selector')).toHaveLength(1)
     })
 
     it('should call setEmbeddingModel when the user selects a model', () => {
       const setEmbeddingModel = vi.fn()
       renderComponent({ setEmbeddingModel })
 
-      fireEvent.click(screen.getByRole('button', { name: 'select-model' }))
+      fireEvent.click(screen.getAllByRole('button', { name: 'select-model' })[0]!)
 
       expect(setEmbeddingModel).toHaveBeenCalledWith({
         provider: 'cohere',
@@ -503,11 +517,11 @@ describe('IndexingSection', () => {
     it('should update the embedding model section when indexMethod changes', () => {
       const { rerender } = renderComponent()
 
-      expect(screen.getByTestId('model-selector')).toBeInTheDocument()
+      expect(screen.getAllByTestId('model-selector')).toHaveLength(2)
 
       rerender(<IndexingSection {...defaultProps} indexMethod={IndexingType.ECONOMICAL} />)
 
-      expect(screen.queryByTestId('model-selector')).not.toBeInTheDocument()
+      expect(screen.getAllByTestId('model-selector')).toHaveLength(1)
     })
 
     it('should update the chunk structure section when currentDataset changes', () => {
@@ -534,7 +548,7 @@ describe('IndexingSection', () => {
       renderComponent({ currentDataset: undefined })
 
       expect(screen.queryByTestId('chunk-structure')).not.toBeInTheDocument()
-      expect(screen.getByTestId('model-selector')).toBeInTheDocument()
+      expect(screen.getAllByTestId('model-selector')).toHaveLength(2)
       expect(screen.getByTestId('retrieval-method-config')).toBeInTheDocument()
     })
   })

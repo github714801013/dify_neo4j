@@ -54,6 +54,8 @@ from .dataset import (
     TidbAuthBinding,
     Whitelist,
 )
+from .dataset_graph_config import DatasetGraphConfig
+from .dataset_graph_index_job import DatasetGraphIndexJob
 from .enums import (
     AppTriggerStatus,
     AppTriggerType,
@@ -195,6 +197,8 @@ __all__ = [
     "DataSourceOauthBinding",
     "Dataset",
     "DatasetCollectionBinding",
+    "DatasetGraphConfig",
+    "DatasetGraphIndexJob",
     "DatasetKeywordTable",
     "DatasetPermission",
     "DatasetPermissionEnum",

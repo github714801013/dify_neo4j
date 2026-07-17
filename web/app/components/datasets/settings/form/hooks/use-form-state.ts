@@ -2,12 +2,14 @@
 import type { AppIconSelection } from '@/app/components/base/app-icon-picker'
 import type { DefaultModel } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import type { Member } from '@/models/common'
-import type { IconInfo, SummaryIndexSetting as SummaryIndexSettingType } from '@/models/datasets'
+import type { GraphRagConfig, IconInfo, SummaryIndexSetting as SummaryIndexSettingType } from '@/models/datasets'
 import type { RetrievalConfig } from '@/types/app'
 import { toast } from '@langgenius/dify-ui/toast'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { isReRankModelSelected } from '@/app/components/datasets/common/check-rerank-model'
+import { DEFAULT_GRAPH_RAG_CONFIG } from '@/app/components/datasets/graph-rag/constants'
+import { validateGraphRagConfig } from '@/app/components/datasets/graph-rag/validation'
 import { ModelTypeEnum } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import { useModelList } from '@/app/components/header/account-setting/model-provider-page/hooks'
 import { useSelector as useAppContextWithSelector } from '@/context/app-context'
@@ -78,10 +80,17 @@ export const useFormState = () => {
 
   // Summary index state
   const [summaryIndexSetting, setSummaryIndexSetting] = useState(currentDataset?.summary_index_setting)
+  const [graphRagConfig, setGraphRagConfig] = useState<GraphRagConfig>(
+    currentDataset?.graph_rag_config ?? {
+      ...DEFAULT_GRAPH_RAG_CONFIG,
+      enabled: currentDataset?.graph_rag_enabled ?? false,
+    },
+  )
 
   // Model lists
   const { data: rerankModelList } = useModelList(ModelTypeEnum.rerank)
   const { data: embeddingModelList } = useModelList(ModelTypeEnum.textEmbedding)
+  const { data: textGenerationModelList } = useModelList(ModelTypeEnum.textGeneration)
   const { data: membersData } = useMembers()
   const invalidDatasetList = useInvalidDatasetList()
 
@@ -138,6 +147,12 @@ export const useFormState = () => {
       return
     }
 
+    const graphRagValidationError = validateGraphRagConfig(graphRagConfig, textGenerationModelList)
+    if (graphRagValidationError) {
+      toast.error(t(`form.graphRag.${graphRagValidationError}`, { ns: 'datasetSettings' }))
+      return
+    }
+
     if (retrievalConfig.weights) {
       retrievalConfig.weights.vector_setting.embedding_provider_name = embeddingModel.provider || ''
       retrievalConfig.weights.vector_setting.embedding_model_name = embeddingModel.model || ''
@@ -160,6 +175,7 @@ export const useFormState = () => {
         embedding_model_provider: embeddingModel.provider,
         keyword_number: keywordNumber,
         summary_index_setting: summaryIndexSetting,
+        graph_rag_config: graphRagConfig,
       }
 
       if (currentDataset!.provider === 'external') {
@@ -256,10 +272,13 @@ export const useFormState = () => {
     embeddingModel,
     setEmbeddingModel,
     embeddingModelList,
+    textGenerationModelList,
 
     // Summary index
     summaryIndexSetting,
     handleSummaryIndexSettingChange,
+    graphRagConfig,
+    setGraphRagConfig,
 
     // Computed
     showMultiModalTip,
