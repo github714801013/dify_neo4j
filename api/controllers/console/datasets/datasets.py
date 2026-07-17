@@ -80,8 +80,16 @@ def _validate_doc_form(value: str | None) -> str | None:
     return value
 
 
-def _get_graph_rag_config(tenant_id: str, dataset_id: str) -> dict[str, Any]:
-    config = db.session.scalar(
+def _get_graph_rag_config(
+    tenant_id: str,
+    dataset_id: str,
+    session: Session | None = None,
+) -> dict[str, Any]:
+    # 优先复用调用方传入的 session（如 @with_session 包裹的写接口事务），
+    # 避免在已开启的事务上下文里使用 db.session 并触发
+    # "Can't operate on closed transaction" 错误。
+    active_session = session if session is not None else db.session
+    config = active_session.scalar(
         select(DatasetGraphConfig).where(
             DatasetGraphConfig.tenant_id == tenant_id,
             DatasetGraphConfig.dataset_id == dataset_id,
@@ -110,12 +118,20 @@ def _get_graph_rag_config(tenant_id: str, dataset_id: str) -> dict[str, Any]:
     }
 
 
-def _save_graph_rag_config(tenant_id: str, dataset_id: str, values: dict[str, Any]) -> None:
-    merged_values = {**_get_graph_rag_config(tenant_id, dataset_id), **values}
+def _save_graph_rag_config(
+    tenant_id: str,
+    dataset_id: str,
+    values: dict[str, Any],
+    session: Session | None = None,
+) -> None:
+    # 复用调用方事务（@with_session 的 begin 上下文会在块结束时统一提交），
+    # 不再自行 db.session.commit()——否则会关闭外层事务导致后续操作报错。
+    active_session = session if session is not None else db.session
+    merged_values = {**_get_graph_rag_config(tenant_id, dataset_id, session=session), **values}
     validated = GraphRagConfigInput.model_validate(
         {key: value for key, value in merged_values.items() if key != "graph_version"}
     )
-    config = db.session.scalar(
+    config = active_session.scalar(
         select(DatasetGraphConfig).where(
             DatasetGraphConfig.tenant_id == tenant_id,
             DatasetGraphConfig.dataset_id == dataset_id,
@@ -126,8 +142,10 @@ def _save_graph_rag_config(tenant_id: str, dataset_id: str, values: dict[str, An
     for field_name, value in validated.model_dump(mode="json").items():
         setattr(config, field_name, value)
     config.graph_version = merged_values.get("graph_version", "v1")
-    db.session.add(config)
-    db.session.commit()
+    active_session.add(config)
+    # 无显式 session 时回退到 db.session，需自行提交以保证落库。
+    if session is None:
+        db.session.commit()
 
 
 class DatasetCreatePayload(BaseModel):
@@ -753,7 +771,7 @@ class DatasetApi(Resource):
             if graph_rag_enabled is not None and "enabled" not in candidate_graph_rag_config:
                 candidate_graph_rag_config["enabled"] = graph_rag_enabled
             merged_graph_rag_config = {
-                **_get_graph_rag_config(current_tenant_id, dataset_id_str),
+                **_get_graph_rag_config(current_tenant_id, dataset_id_str, session=session),
                 **candidate_graph_rag_config,
             }
             GraphRagConfigInput.model_validate(
@@ -774,7 +792,7 @@ class DatasetApi(Resource):
             graph_rag_config = graph_rag_config or {}
             if graph_rag_enabled is not None and "enabled" not in graph_rag_config:
                 graph_rag_config["enabled"] = graph_rag_enabled
-            _save_graph_rag_config(current_tenant_id, dataset_id_str, graph_rag_config)
+            _save_graph_rag_config(current_tenant_id, dataset_id_str, graph_rag_config, session=session)
 
         permission_keys_map = enterprise_rbac_service.RBACService.DatasetPermissions.batch_get(
             current_tenant_id,
@@ -784,7 +802,7 @@ class DatasetApi(Resource):
         )
         result_data = dump_response(DatasetDetailResponse, dataset)
         result_data["permission_keys"] = permission_keys_map.get(dataset_id_str, [])
-        graph_rag_config = _get_graph_rag_config(current_tenant_id, dataset_id_str)
+        graph_rag_config = _get_graph_rag_config(current_tenant_id, dataset_id_str, session=session)
         result_data["graph_rag_enabled"] = graph_rag_config["enabled"]
         result_data["graph_rag_config"] = graph_rag_config
         tenant_id = current_tenant_id
