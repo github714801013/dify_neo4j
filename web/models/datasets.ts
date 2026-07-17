@@ -53,6 +53,7 @@ export type GraphExtractModelConfig = {
   provider: string
   model: string
   temperature: number
+  max_tokens?: number
   max_triplets_per_chunk: number
   strict: boolean
 }

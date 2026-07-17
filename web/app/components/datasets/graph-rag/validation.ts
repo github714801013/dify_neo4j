@@ -8,6 +8,7 @@ export type GraphRagConfigValidationError = 'extract_model_required'
   | 'invalid_graph_limits'
   | 'invalid_temperature'
   | 'invalid_triplets'
+  | 'invalid_max_tokens'
 
 export const validateGraphRagConfig = (
   config: GraphRagConfig,
@@ -31,6 +32,8 @@ export const validateGraphRagConfig = (
     return 'invalid_temperature'
   if (extractor.max_triplets_per_chunk < GRAPH_RAG_LIMITS.maxTripletsPerChunk.min || extractor.max_triplets_per_chunk > GRAPH_RAG_LIMITS.maxTripletsPerChunk.max)
     return 'invalid_triplets'
+  if (extractor.max_tokens !== undefined && extractor.max_tokens !== null && (extractor.max_tokens < GRAPH_RAG_LIMITS.maxTokens.min || extractor.max_tokens > GRAPH_RAG_LIMITS.maxTokens.max))
+    return 'invalid_max_tokens'
   if (modelList.length > 0) {
     const provider = modelList.find(item => item.provider === extractor.provider)
     const model = provider?.models.find(item => item.model === extractor.model && item.status === ModelStatusEnum.active)

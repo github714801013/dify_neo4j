@@ -35,10 +35,6 @@ from graphon.model_runtime.entities.model_entities import ModelType
 
 logger = logging.getLogger(__name__)
 
-# 单次抽取的 LLM 参数。temperature=0 降低随机性；max_tokens 留足结构化输出空间。
-_EXTRACTION_MAX_TOKENS = 2048
-_EXTRACTION_TEMPERATURE = 0.0
-
 
 class GraphExtractionError(Exception):
     """LLM 实体抽取阶段的可预期错误，便于上层决定重试。"""
@@ -69,6 +65,7 @@ def extract_with_llm(
     provider: str,
     model: str,
     temperature: float,
+    max_tokens: int | None = None,
     segment_text: str,
     schema: GraphSchema,
 ) -> ExtractionResult:
@@ -83,10 +80,9 @@ def extract_with_llm(
         SystemPromptMessage(content=_SYSTEM_PROMPT),
         UserPromptMessage(content=build_user_prompt(segment_text, schema)),
     ]
-    model_parameters = {
-        "max_tokens": _EXTRACTION_MAX_TOKENS,
-        "temperature": temperature,
-    }
+    model_parameters: dict[str, object] = {"temperature": temperature}
+    if max_tokens is not None:
+        model_parameters["max_tokens"] = max_tokens
 
     try:
         model_instance = ModelManager.for_tenant(tenant_id=tenant_id).get_model_instance(

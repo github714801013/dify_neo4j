@@ -17,5 +17,6 @@ export const GRAPH_RAG_LIMITS = {
   graphTimeoutMs: { min: 100, max: 30000 },
   graphWeight: { min: 0, max: 1 },
   temperature: { min: 0, max: 2 },
+  maxTokens: { min: 1, max: 32768 },
   maxTripletsPerChunk: { min: 1, max: 50 },
 } as const

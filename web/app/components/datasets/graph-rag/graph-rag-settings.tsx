@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next'
 import Divider from '@/app/components/base/divider'
 import ParamItem from '@/app/components/base/param-item'
 import ModelSelector from '@/app/components/header/account-setting/model-provider-page/model-selector'
+import { GRAPH_RAG_LIMITS } from './constants'
 
 const rowClass = 'flex gap-x-1'
 const labelClass = 'flex items-center shrink-0 w-[180px] h-7 pt-1'
@@ -28,6 +29,7 @@ export function GraphRagSettings({ config, modelList, onChange, readonly = false
         provider: extractModelConfig?.provider ?? '',
         model: extractModelConfig?.model ?? '',
         temperature: extractModelConfig?.temperature ?? 0,
+        max_tokens: extractModelConfig?.max_tokens,
         max_triplets_per_chunk: extractModelConfig?.max_triplets_per_chunk ?? 10,
         strict: extractModelConfig?.strict ?? true,
         ...patch,
@@ -141,6 +143,17 @@ export function GraphRagSettings({ config, modelList, onChange, readonly = false
             noTooltip
             disabled={readonly}
             onChange={(_, max_triplets_per_chunk) => updateExtractor({ max_triplets_per_chunk })}
+          />
+          <ParamItem
+            id="max_tokens"
+            name={t('form.graphRag.maxTokens', { ns: 'datasetSettings' })}
+            value={extractModelConfig?.max_tokens ?? 0}
+            min={GRAPH_RAG_LIMITS.maxTokens.min}
+            max={GRAPH_RAG_LIMITS.maxTokens.max}
+            enable={true}
+            tip={t('form.graphRag.maxTokensHelp', { ns: 'datasetSettings' })}
+            disabled={readonly}
+            onChange={(_, max_tokens) => updateExtractor({ max_tokens: max_tokens || undefined })}
           />
           <label className="col-span-2 flex items-center gap-2 text-sm text-text-secondary">
             <Switch checked={extractModelConfig?.strict ?? true} onCheckedChange={strict => updateExtractor({ strict })} disabled={readonly} />

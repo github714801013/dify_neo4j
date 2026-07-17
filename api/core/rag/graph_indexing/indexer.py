@@ -100,6 +100,7 @@ def run_indexer(repository: _JobRepository, job: DatasetGraphIndexJob) -> None:
                 provider=extract_model.provider,
                 model=extract_model.model,
                 temperature=extract_model.temperature,
+                max_tokens=extract_model.max_tokens,
                 segment_text=text,
                 schema=schema,
             )

@@ -59,6 +59,9 @@ class GraphExtractModelConfig(BaseModel):
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     temperature: float = Field(default=0, ge=0, le=2)
+    max_tokens: int | None = Field(
+        default=None, ge=1, le=131072, description="LLM 输出 token 上限；为空时复用提供商模型默认值"
+    )
     max_triplets_per_chunk: int = Field(default=10, ge=1, le=50)
     strict: StrictBool = True
 
