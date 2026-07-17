@@ -1,6 +1,6 @@
 """新增 Dataset GraphRAG 索引 Job 表
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: f0e1d2c3b4a5
 Revises: e7f4a9b2c6d1
 Create Date: 2026-07-17 10:00:00.000000
 
@@ -12,7 +12,7 @@ from alembic import op
 import models
 
 # Alembic 版本标识。
-revision = "a1b2c3d4e5f6"
+revision = "f0e1d2c3b4a5"
 down_revision = "e7f4a9b2c6d1"
 branch_labels = None
 depends_on = None
