@@ -34,10 +34,10 @@ class GraphWriteError(Exception):
     """Neo4j 写入阶段的可预期错误，便于上层决定重试。"""
 
 
-_driver: "Driver | None" = None
+_driver: Driver | None = None
 
 
-def _get_driver() -> "Driver":
+def _get_driver() -> Driver:
     """惰性创建并复用进程级 neo4j driver 单例。
 
     连接配置缺失时抛出 GraphWriteError，由调用方标记 Job 失败，避免每次
@@ -57,7 +57,7 @@ def _get_driver() -> "Driver":
         from neo4j import GraphDatabase
 
         _driver = GraphDatabase.driver(uri, auth=(username, password))
-    except Exception as ex:  # noqa: BLE001
+    except Exception as ex:
         raise GraphWriteError(f"failed to create neo4j driver: {ex}") from ex
     return _driver
 
@@ -117,7 +117,7 @@ def write_segment(
                 )
     except GraphWriteError:
         raise
-    except Exception as ex:  # noqa: BLE001 - 驱动/网络错误统一包装
+    except Exception as ex:
         raise GraphWriteError(f"neo4j write failed: {ex}") from ex
     return len(extraction.triples)
 

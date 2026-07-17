@@ -23,15 +23,15 @@ import logging
 from dataclasses import dataclass, field
 
 import json_repair
+
+from core.model_manager import ModelManager
+from core.rag.graph.entities import GraphSchema
+from core.rag.graph_indexing.prompts import _SYSTEM_PROMPT, build_user_prompt
 from graphon.model_runtime.entities.message_entities import (
     SystemPromptMessage,
     UserPromptMessage,
 )
 from graphon.model_runtime.entities.model_entities import ModelType
-
-from core.model_manager import ModelManager
-from core.rag.graph.entities import GraphSchema
-from core.rag.graph_indexing.prompts import _SYSTEM_PROMPT, build_user_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ def extract_with_llm(
             model_parameters=model_parameters,
             stream=False,
         )
-    except Exception as ex:  # noqa: BLE001 - 上层依据异常决定重试
+    except Exception as ex:
         logger.warning("graph_extract llm invoke failed tenant=%s model=%s err=%s", tenant_id, model, ex)
         raise GraphExtractionError(f"llm invoke failed: {ex}") from ex
 
@@ -180,8 +180,8 @@ def _filter_by_schema(payload: dict, schema: GraphSchema) -> ExtractionResult:
 
 
 __all__ = [
-    "ExtractionResult",
     "ExtractedTriple",
+    "ExtractionResult",
     "GraphExtractionError",
     "extract_with_llm",
 ]
