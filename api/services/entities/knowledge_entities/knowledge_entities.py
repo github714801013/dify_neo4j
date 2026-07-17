@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, WithJsonSchema, field_validator
 
 from core.rag.entities import Rule
 from core.rag.entities.metadata_entities import MetadataFilteringCondition
+from core.rag.graph.entities import GraphRagConfigInput
 from core.rag.index_processor.constant.index_type import IndexStructureType
 from core.rag.retrieval.retrieval_methods import RetrievalMethod
 from models.enums import ProcessRuleMode
@@ -228,6 +229,9 @@ class KnowledgeConfig(BaseModel):
     )
     name: str | None = Field(default=None, description="Document name.")
     is_multimodal: bool = Field(default=False, description="Whether the document uses multimodal indexing.")
+    graph_rag_config: GraphRagConfigInput | None = Field(
+        default=None, description="Dataset GraphRAG configuration for first-document creation."
+    )
 
     @field_validator("doc_form")
     @classmethod

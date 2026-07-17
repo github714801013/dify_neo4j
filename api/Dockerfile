@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir uv==${UV_VERSION}
 
 FROM base AS packages
 
+ARG UV_INDEX_URL
+
 # if you located in China, you can use aliyun mirror to speed up
 # RUN sed -i 's@deb.debian.org@mirrors.aliyun.com@g' /etc/apt/sources.list.d/debian.sources
 
@@ -27,7 +29,9 @@ COPY api/providers ./providers
 COPY dify-agent/pyproject.toml dify-agent/README.md /app/dify-agent/
 COPY dify-agent/src /app/dify-agent/src
 # Trust the checked-in lock during image builds; local path sources are copied from the repository context.
-RUN uv sync --frozen --no-dev --no-editable
+RUN if [ -n "${UV_INDEX_URL:-}" ]; then export UV_INDEX_URL; fi \
+    && uv sync --frozen --no-dev --no-editable \
+    && uv pip install --python /app/api/.venv/bin/python --no-deps /app/api/providers/vdb/vdb-oceanbase
 
 # production stage
 FROM base AS production

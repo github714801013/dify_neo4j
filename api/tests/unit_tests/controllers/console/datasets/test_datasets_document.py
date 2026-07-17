@@ -4,6 +4,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from flask import Flask
+from pydantic import ValidationError
 from werkzeug.exceptions import Forbidden, NotFound
 
 import services
@@ -453,6 +454,27 @@ class TestDatasetDocumentListApi:
 
 
 class TestDatasetInitApi:
+    def test_post_rejects_invalid_graph_rag_config_before_dataset_creation(self, app: Flask, patch_tenant):
+        api = DatasetInitApi()
+        method = inspect.unwrap(api.post)
+        user, tenant_id = patch_tenant
+        payload = {
+            "indexing_technique": "economy",
+            "graph_rag_config": {"enabled": True},
+        }
+
+        with (
+            app.test_request_context("/", json=payload),
+            patch.object(type(console_ns), "payload", payload),
+            patch(
+                "controllers.console.datasets.datasets_document.DocumentService.save_document_without_dataset_id"
+            ) as save_document,
+        ):
+            with pytest.raises(ValidationError):
+                method(api, tenant_id, user)
+
+        save_document.assert_not_called()
+
     def test_post_success_serializes_created_dataset_and_documents(self, app: Flask, patch_tenant):
         api = DatasetInitApi()
         method = inspect.unwrap(api.post)

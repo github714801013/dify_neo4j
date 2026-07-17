@@ -35,7 +35,7 @@ from libs import helper
 from libs.datetime_utils import naive_utc_now
 from libs.login import current_user
 from libs.pagination import paginate_query
-from models import Account, TenantAccountRole
+from models import Account, TenantAccountRole, DatasetGraphConfig
 from models.dataset import (
     AppDatasetJoin,
     ChildChunk,
@@ -3002,6 +3002,25 @@ class DocumentService:
 
         session.add(dataset)
         session.flush()
+
+        if knowledge_config.graph_rag_config is not None:
+            graph_config = knowledge_config.graph_rag_config
+            db.session.add(
+                DatasetGraphConfig(
+                    tenant_id=tenant_id,
+                    dataset_id=dataset.id,
+                    enabled=graph_config.enabled,
+                    query_mode=graph_config.query_mode,
+                    graph_top_k=graph_config.graph_top_k,
+                    graph_max_depth=graph_config.graph_max_depth,
+                    graph_timeout_ms=graph_config.graph_timeout_ms,
+                    graph_weight=graph_config.graph_weight,
+                    extract_model_config=graph_config.extract_model_config.model_dump(mode="json")
+                    if graph_config.extract_model_config
+                    else None,
+                )
+            )
+
 
         documents, batch = DocumentService.save_document_with_dataset_id(
             dataset, knowledge_config, account, session=session

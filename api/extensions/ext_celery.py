@@ -255,6 +255,11 @@ def init_app(app: DifyApp) -> Celery:
             "task": "schedule.update_api_token_last_used_task.batch_update_api_token_last_used",
             "schedule": timedelta(minutes=dify_config.API_TOKEN_LAST_USED_UPDATE_INTERVAL),
         }
+    if dify_config.ENABLE_GRAPH_RECONCILE_TASK:
+        beat_schedule["graph_reconcile_task"] = {
+            "task": "schedule.graph_reconcile_task.graph_reconcile_task",
+            "schedule": timedelta(minutes=dify_config.GRAPH_RECONCILE_INTERVAL_MINUTES),
+        }
 
     if dify_config.ENTERPRISE_ENABLED and dify_config.ENTERPRISE_TELEMETRY_ENABLED:
         imports.append("tasks.enterprise_telemetry_task")

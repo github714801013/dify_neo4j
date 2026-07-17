@@ -196,6 +196,10 @@ vi.mock('@/app/components/header/account-setting/model-provider-page/model-selec
   ),
 }))
 
+vi.mock('@/app/components/datasets/graph-rag/graph-rag-settings', () => ({
+  GraphRagSettings: () => <div data-testid="graph-rag-settings" />,
+}))
+
 vi.mock('@/app/components/datasets/common/retrieval-method-config', () => ({
   default: ({ disabled }: { disabled?: boolean }) => (
     <div data-testid="retrieval-method-config" data-disabled={disabled}>

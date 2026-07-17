@@ -19,6 +19,8 @@ ENV NEXT_PUBLIC_BASE_PATH="$NEXT_PUBLIC_BASE_PATH"
 # install packages
 FROM base AS packages
 
+ARG NPM_CONFIG_REGISTRY
+
 WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml /app/
@@ -31,7 +33,12 @@ COPY packages /app/packages
 RUN corepack install
 
 # Install workspace dependencies for the Docker build environment.
-RUN VITE_GIT_HOOKS=0 pnpm install --frozen-lockfile
+RUN if [ -n "${NPM_CONFIG_REGISTRY:-}" ]; then \
+      export NPM_CONFIG_REGISTRY \
+      && export npm_config_registry="${NPM_CONFIG_REGISTRY}" \
+      && sed -i "s|https://registry.npmjs.org|${NPM_CONFIG_REGISTRY}|g" /app/pnpm-lock.yaml; \
+    fi \
+    && VITE_GIT_HOOKS=0 pnpm install --registry="${NPM_CONFIG_REGISTRY:-https://registry.npmjs.org}" --frozen-lockfile --prod=false --shamefully-hoist
 
 # build resources
 FROM base AS builder

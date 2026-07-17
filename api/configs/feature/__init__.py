@@ -493,6 +493,22 @@ class FileUploadConfig(BaseSettings):
         }
 
 
+class GraphRAGConfig(BaseSettings):
+    """GraphRAG 全局保护配置；仅 Dataset 设置不能单独启用该功能。"""
+
+    GRAPH_RAG_ENABLED: bool = Field(description="全局启用 GraphRAG 处理", default=False)
+    GRAPH_RAG_FAIL_OPEN: bool = Field(description="GraphRAG 失败时保留基础检索", default=True)
+    GRAPH_RAG_DEFAULT_TIMEOUT_MS: PositiveInt = Field(description="GraphRAG 查询默认超时毫秒数", default=1500)
+    NEO4J_URI: str | None = Field(description="Neo4j 连接 URI", default=None)
+    NEO4J_USERNAME: str | None = Field(description="Neo4j 用户名", default=None)
+    NEO4J_PASSWORD: str | None = Field(description="Neo4j 密码", default=None)
+    NEO4J_DATABASE: str | None = Field(description="Neo4j 数据库名称", default=None)
+    GRAPH_INDEX_WORKER_CONCURRENCY: PositiveInt = Field(description="预留的 GraphRAG Worker 并发数", default=2)
+    GRAPH_INDEX_MAX_RETRIES: PositiveInt = Field(description="GraphRAG 索引最大重试次数", default=5)
+    GRAPH_INDEX_RETRY_BASE_SECONDS: PositiveInt = Field(description="GraphRAG 索引重试的基础等待秒数", default=30)
+    GRAPH_RECONCILE_INTERVAL_MINUTES: PositiveInt = Field(description="后续 GraphRAG 对账的执行间隔分钟数", default=30)
+
+
 class HttpConfig(BaseSettings):
     """
     HTTP-related configurations for the application
@@ -1283,6 +1299,10 @@ class CeleryScheduleTasksConfig(BaseSettings):
         description="Enable check upgradable plugin task",
         default=True,
     )
+    ENABLE_GRAPH_RECONCILE_TASK: bool = Field(
+        description="Enable GraphRAG graph index reconcile task",
+        default=False,
+    )
     ENABLE_WORKFLOW_SCHEDULE_POLLER_TASK: bool = Field(
         description="Enable workflow schedule poller task",
         default=True,
@@ -1503,6 +1523,7 @@ class FeatureConfig(
     EndpointConfig,
     FileAccessConfig,
     FileUploadConfig,
+    GraphRAGConfig,
     HomepageConfig,
     HttpConfig,
     InnerAPIConfig,

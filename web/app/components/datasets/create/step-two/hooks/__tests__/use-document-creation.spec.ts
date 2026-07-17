@@ -1,4 +1,4 @@
-import type { CreateDocumentReq, CustomFile, FullDocumentDetail, ProcessRule } from '@/models/datasets'
+import type { CreateDocumentReq, CustomFile, FullDocumentDetail, GraphRagConfig, ProcessRule } from '@/models/datasets'
 import type { RetrievalConfig } from '@/types/app'
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -115,6 +115,26 @@ describe('useDocumentCreation', () => {
       expect(result.current.validateParams(defaultValidationParams)).toBe(false)
     })
 
+    it('should stop creation validation when GraphRAG is enabled without an extractor model', () => {
+      const { result } = renderHook(() => useDocumentCreation(defaultOptions))
+      const invalid = {
+        ...defaultValidationParams,
+        graphRagConfig: {
+          enabled: true,
+          query_mode: 'hybrid' as const,
+          graph_top_k: 10,
+          graph_max_depth: 1,
+          graph_timeout_ms: 1500,
+          graph_weight: 0.3,
+          extract_model_config: null,
+          graph_version: 'v1',
+        } satisfies GraphRagConfig,
+        graphRagModelList: [],
+      }
+      expect(result.current.validateParams(invalid)).toBe(false)
+      expect(mocks.mutateAsync).not.toHaveBeenCalled()
+    })
+
     it('should skip embedding/rerank checks when isSetting is true', () => {
       mocks.isReRankModelSelected.mockReturnValue(false)
       const { result } = renderHook(() =>
@@ -149,6 +169,38 @@ describe('useDocumentCreation', () => {
       expect(params!.data_source!.info_list.file_info_list?.file_ids).toContain('f-1')
       expect(params!.embedding_model).toBe('text-embedding-3-small')
       expect(params!.embedding_model_provider).toBe('openai')
+    })
+
+    it('should include GraphRAG config in the first document creation request', () => {
+      const { result } = renderHook(() => useDocumentCreation(defaultOptions))
+      const graphRagConfig: GraphRagConfig = {
+        enabled: true,
+        query_mode: 'hybrid',
+        graph_top_k: 10,
+        graph_max_depth: 1,
+        graph_timeout_ms: 1500,
+        graph_weight: 0.3,
+        extract_model_config: {
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          temperature: 0,
+          max_triplets_per_chunk: 10,
+          strict: true,
+        },
+        graph_version: 'v1',
+      }
+      const params = result.current.buildCreationParams(
+        ChunkingMode.text,
+        'English',
+        { mode: 'custom', rules: {} } as unknown as ProcessRule,
+        defaultValidationParams.retrievalConfig,
+        { provider: 'openai', model: 'text-embedding-3-small' },
+        'high_quality',
+        undefined,
+        graphRagConfig,
+      )
+
+      expect(params?.graph_rag_config).toEqual(graphRagConfig)
     })
 
     it('should build params for isSetting mode', () => {
