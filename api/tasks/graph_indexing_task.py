@@ -1,21 +1,14 @@
 """GraphRAG 索引 Worker 任务。
 
-Phase 2 边界
-=============
+事务边界
+========
 
-- 只实现 Job 的原子领取与状态迁移。
-- 不实现实体关系抽取与 Neo4j 写入（Phase 3 适配器）。
-- 没有 Adapter 时，Worker 必须显式标记为 retry_waiting，错误码
-  `graph_indexer_not_implemented`，禁止伪成功。
-- Worker 失败不得影响普通 Dataset 索引任务：使用独立 `graph_index` 队列，
-  且异常在本任务内消化，不向上抛出导致重试风暴。
+1. 使用短事务原子领取 Job，并提交 ``running`` 状态。
+2. 在数据库事务外执行 LLM 抽取与 Neo4j 写入。
+3. 使用新的短事务持久化 succeeded/retry_waiting/failed/cancelled 结果。
 
-Phase 3
-=======
-
-- ``_process_job`` 委托给 ``core.rag.graph_indexing.indexer.run_indexer`` 完成
-  LLM 实体抽取与 Neo4j 写入，并复用既有状态机标记终态。
-- 适配器自身的异常已在内部消化为状态迁移，因此这里不再兜底重复标记。
+Worker 失败不得影响普通 Dataset 索引任务：使用独立 ``graph_index`` 队列，
+并在任务内记录错误，避免 Celery 自动重试造成风暴。
 """
 
 from __future__ import annotations
@@ -25,54 +18,97 @@ import logging
 import click
 from celery import shared_task
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from configs import dify_config
+from core.rag.graph_indexing.entities import GraphIndexJobStatus
 from core.rag.graph_indexing.errors import (
     GraphIndexJobClaimError,
     GraphIndexJobNotFoundError,
 )
-from core.rag.graph_indexing.indexer import run_indexer
+from core.rag.graph_indexing.indexer import (
+    GraphIndexJobRequest,
+    GraphIndexOutcome,
+    run_indexer,
+)
 from core.rag.graph_indexing.repositories import SqlAlchemyGraphIndexJobRepository
 from extensions.ext_database import db
-from models.dataset_graph_index_job import DatasetGraphIndexJob
 
 logger = logging.getLogger(__name__)
 
 
 @shared_task(queue="graph_index")
 def graph_indexing_task(job_id: str) -> None:
-    """处理单个 Graph Index Job。"""
+    """领取并处理单个 Graph Index Job。"""
     click.echo(click.style(f"Start graph index job: {job_id}", fg="green"))
     try:
-        with db.session.begin():
-            repository = SqlAlchemyGraphIndexJobRepository(db.session)
-            try:
-                job = repository.claim(job_id)
-            except (GraphIndexJobNotFoundError, GraphIndexJobClaimError) as ex:
-                logger.warning("graph_index job not claimable job=%s reason=%s", job_id, ex.code)
-                return
-
-            _process_job(repository, job)
+        job = _claim_job(job_id)
+    except (GraphIndexJobNotFoundError, GraphIndexJobClaimError) as ex:
+        logger.warning("graph_index job not claimable job=%s reason=%s", job_id, ex.code)
+        return
     except SQLAlchemyError:
-        logger.exception("graph_indexing_task failed with database error job=%s", job_id)
-        return
-    except Exception:
-        logger.exception("graph_indexing_task failed job=%s", job_id)
+        logger.exception("graph_index job claim failed with database error job=%s", job_id)
         return
 
-
-def _process_job(repository, job: DatasetGraphIndexJob) -> None:
-    """执行 Job 的实际处理：LLM 抽取 + Neo4j 写入。"""
-    # Phase 3：委托适配器完成抽取与写入；适配器内部按状态机标记终态，
-    # 失败不抛出，避免 Worker 触发 Celery 重试风暴。
     try:
-        run_indexer(repository, job)
+        outcome = run_indexer(job)
     except Exception:
-        # 适配器未预期的异常兜底为 retry_waiting，保证不伪成功且可被对账恢复。
-        logger.exception("graph_indexing_task unexpected error job=%s", job.id)
-        repository.mark_retry_waiting(
-            job.id,
+        logger.exception("graph_indexer raised unexpected error job=%s", job_id)
+        outcome = GraphIndexOutcome.retry(
             error_code="graph_indexer_unexpected_error",
             error_message="indexer raised unexpected exception",
-            retry_base_seconds=dify_config.GRAPH_INDEX_RETRY_BASE_SECONDS,
         )
+
+    try:
+        _persist_outcome(job_id, outcome)
+    except (GraphIndexJobNotFoundError, GraphIndexJobClaimError):
+        logger.exception("graph_index outcome cannot be persisted job=%s status=%s", job_id, outcome.status)
+    except SQLAlchemyError:
+        logger.exception("graph_index outcome persistence failed with database error job=%s", job_id)
+
+
+def _claim_job(job_id: str) -> GraphIndexJobRequest:
+    """在独立短事务中原子领取 Job，并返回提交后可安全使用的快照。"""
+    with Session(db.engine, expire_on_commit=False) as session, session.begin():
+        repository = SqlAlchemyGraphIndexJobRepository(session)
+        job = repository.claim(job_id)
+        return GraphIndexJobRequest.from_job(job)
+
+
+def _persist_outcome(job_id: str, outcome: GraphIndexOutcome) -> None:
+    """在独立短事务中持久化 Indexer 结果。"""
+    with Session(db.engine, expire_on_commit=False) as session, session.begin():
+        repository = SqlAlchemyGraphIndexJobRepository(session)
+        if outcome.status == GraphIndexJobStatus.SUCCEEDED:
+            repository.mark_succeeded(job_id)
+            return
+
+        error_code = outcome.error_code or "graph_indexer_unknown_error"
+        error_message = outcome.error_message or "graph indexer returned no error message"
+        if outcome.status == GraphIndexJobStatus.CANCELLED:
+            repository.mark_cancelled(
+                job_id,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            return
+        if outcome.status == GraphIndexJobStatus.FAILED:
+            repository.mark_failed(
+                job_id,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            return
+        if outcome.status == GraphIndexJobStatus.RETRY_WAITING:
+            repository.mark_retry_waiting(
+                job_id,
+                error_code=error_code,
+                error_message=error_message,
+                retry_base_seconds=dify_config.GRAPH_INDEX_RETRY_BASE_SECONDS,
+                max_retries=dify_config.GRAPH_INDEX_MAX_RETRIES,
+            )
+            return
+        raise ValueError(f"unsupported graph index outcome: {outcome.status}")
+
+
+__all__ = ["graph_indexing_task"]

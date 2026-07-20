@@ -124,9 +124,8 @@ def _save_graph_rag_config(
     values: dict[str, Any],
     session: Session | None = None,
 ) -> None:
-    # 优先用调用方传入的 session;但 PATCH 链路里 update_dataset 已
-    # session.commit() 关闭了 @with_session 的事务,因此默认(None)走
-    # db.session(scoped session,自管理事务,commit 后可继续用)更稳妥。
+    # DatasetService.update_dataset 内部会自行提交事务，因此默认的 GraphRAG 配置写入
+    # 使用独立 scoped session，保持各自的事务生命周期。
     active_session = session if session is not None else db.session
     merged_values = {**_get_graph_rag_config(tenant_id, dataset_id, session=session), **values}
     validated = GraphRagConfigInput.model_validate(
@@ -744,7 +743,7 @@ class DatasetApi(Resource):
     @with_current_user
     @with_current_tenant_id
     @rbac_permission_required(RBACResourceScope.DATASET, RBACPermission.DATASET_EDIT)
-    @with_session
+    @with_session(write=False)
     def patch(self, session: Session, current_tenant_id: str, current_user: Account, dataset_id: UUID):
         dataset_id_str = str(dataset_id)
         dataset = DatasetService.get_dataset(dataset_id_str, db.session())

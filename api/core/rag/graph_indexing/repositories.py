@@ -8,6 +8,8 @@
 - 所有查询都带 `tenant_id` 范围限制，保证租户隔离。
 - 幂等创建使用 `begin_nested()` + `IntegrityError` 处理并发重复插入；冲突时
   视为幂等成功，返回已存在的 Job，不破坏外层事务。
+- Job 领取同时锁定 Document 行，保证同一文档的不同 source_version 不会并行
+  写入和切换 Neo4j 版本。
 
 为什么不直接在 Reconciler 里写 SQL
 ------------------------------------
@@ -40,9 +42,10 @@ from core.rag.graph_indexing.errors import (
     GraphIndexJobNotFoundError,
 )
 from libs.datetime_utils import naive_utc_now
-from models.dataset import Document
+from models.dataset import Document, DocumentSegment
 from models.dataset_graph_config import DatasetGraphConfig
 from models.dataset_graph_index_job import DatasetGraphIndexJob
+from models.enums import SegmentStatus
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +86,30 @@ class GraphIndexJobRepository(Protocol):
         """列出 completed 且未归档的 Document。"""
         ...
 
+    def list_active_segments_for_document(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        document_id: str,
+    ) -> Sequence[DocumentSegment]:
+        """列出参与当前图版本计算和写入的有效 Segment。"""
+        ...
+
+    def list_active_document_ids(self, *, tenant_id: str, dataset_id: str) -> Sequence[str]:
+        """列出 Dataset 当前仍有效的 Document ID。"""
+        ...
+
+    def list_active_segment_ids(self, *, tenant_id: str, dataset_id: str) -> Sequence[str]:
+        """列出 Dataset 当前仍有效的 Segment ID。"""
+        ...
+
     def requeue_stale_running_jobs(self, *, stale_minutes: int) -> int:
-        """将超时的 running 与 retry_waiting Job 恢复为 pending。"""
+        """将超时 running 与已到期 retry_waiting Job 恢复为 pending。"""
+        ...
+
+    def list_dispatchable_jobs(self, *, limit: int) -> Sequence[DatasetGraphIndexJob]:
+        """列出当前可投递的 pending Job。"""
         ...
 
     def get(self, job_id: str) -> DatasetGraphIndexJob | None:
@@ -102,8 +127,9 @@ class GraphIndexJobRepository(Protocol):
         error_code: str,
         error_message: str,
         retry_base_seconds: int,
+        max_retries: int,
     ) -> DatasetGraphIndexJob:
-        """将 running Job 标记为 retry_waiting，并按基础等待秒推迟 available_at。"""
+        """记录一次失败；未达上限时指数退避，达到上限时进入 failed。"""
         ...
 
     def mark_failed(
@@ -114,6 +140,16 @@ class GraphIndexJobRepository(Protocol):
         error_message: str,
     ) -> DatasetGraphIndexJob:
         """将 Job 标记为 failed。"""
+        ...
+
+    def mark_cancelled(
+        self,
+        job_id: str,
+        *,
+        error_code: str,
+        error_message: str,
+    ) -> DatasetGraphIndexJob:
+        """将已过期或不再需要执行的 running Job 标记为 cancelled。"""
         ...
 
     def mark_succeeded(self, job_id: str) -> DatasetGraphIndexJob:
@@ -173,12 +209,26 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
             graph_version=graph_version,
             status=GraphIndexJobStatus.PENDING,
         )
-        self._session.add(job)
         try:
-            self._session.flush()
+            # 唯一键冲突只回滚 savepoint，不能破坏 Reconciler 的外层事务。
+            with self._session.begin_nested():
+                self._session.add(job)
+                self._session.flush()
         except IntegrityError as ex:
-            # 并发插入触发唯一键冲突，视为幂等成功。
-            self._session.rollback()
+            self._session.expire_all()
+            concurrent_job = self._session.scalar(
+                select(DatasetGraphIndexJob)
+                .where(
+                    DatasetGraphIndexJob.tenant_id == tenant_id,
+                    DatasetGraphIndexJob.dataset_id == dataset_id,
+                    DatasetGraphIndexJob.document_id == document_id,
+                    DatasetGraphIndexJob.source_version == source_version,
+                    DatasetGraphIndexJob.graph_version == graph_version,
+                )
+                .limit(1)
+            )
+            if concurrent_job is not None:
+                return None
             raise GraphIndexJobConflictError(
                 "graph_index_job unique conflict",
                 code="graph_index_job_conflict",
@@ -216,7 +266,9 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
             .where(
                 Document.tenant_id == tenant_id,
                 Document.dataset_id == dataset_id,
+                Document.enabled.is_(True),
                 Document.archived.is_(False),
+                Document.indexing_status == "completed",
                 Document.completed_at.is_not(None),
             )
             .order_by(Document.created_at)
@@ -225,46 +277,154 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
         )
         return self._session.scalars(stmt).all()
 
+    def list_active_segments_for_document(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        document_id: str,
+    ) -> Sequence[DocumentSegment]:
+        return self._session.scalars(
+            select(DocumentSegment)
+            .where(
+                DocumentSegment.tenant_id == tenant_id,
+                DocumentSegment.dataset_id == dataset_id,
+                DocumentSegment.document_id == document_id,
+                DocumentSegment.enabled.is_(True),
+                DocumentSegment.status == SegmentStatus.COMPLETED,
+            )
+            .order_by(DocumentSegment.position, DocumentSegment.id)
+        ).all()
+
+    def list_active_document_ids(self, *, tenant_id: str, dataset_id: str) -> Sequence[str]:
+        return self._session.scalars(
+            select(Document.id).where(
+                Document.tenant_id == tenant_id,
+                Document.dataset_id == dataset_id,
+                Document.enabled.is_(True),
+                Document.archived.is_(False),
+                Document.indexing_status == "completed",
+                Document.completed_at.is_not(None),
+            )
+        ).all()
+
+    def list_active_segment_ids(self, *, tenant_id: str, dataset_id: str) -> Sequence[str]:
+        return self._session.scalars(
+            select(DocumentSegment.id)
+            .join(Document, Document.id == DocumentSegment.document_id)
+            .where(
+                DocumentSegment.tenant_id == tenant_id,
+                DocumentSegment.dataset_id == dataset_id,
+                DocumentSegment.enabled.is_(True),
+                DocumentSegment.status == SegmentStatus.COMPLETED,
+                Document.tenant_id == tenant_id,
+                Document.dataset_id == dataset_id,
+                Document.enabled.is_(True),
+                Document.archived.is_(False),
+                Document.indexing_status == "completed",
+                Document.completed_at.is_not(None),
+            )
+        ).all()
+
     def requeue_stale_running_jobs(self, *, stale_minutes: int) -> int:
         now = naive_utc_now()
         threshold = now - timedelta(minutes=stale_minutes)
-        # retry_waiting 一律恢复为 pending；running 仅在 locked_at 超过阈值时恢复，
-        # 避免误伤正在执行中的 Job。
-        stale_jobs = self._session.scalars(
-            select(DatasetGraphIndexJob)
-            .where(
-                DatasetGraphIndexJob.status.in_(list(resumable_statuses())),
-            )
-            .limit(1000)
+        recoverable_jobs = self._session.scalars(
+            select(DatasetGraphIndexJob).where(DatasetGraphIndexJob.status.in_(list(resumable_statuses()))).limit(1000)
         ).all()
         recovered = 0
-        for job in stale_jobs:
-            is_retry = job.status == GraphIndexJobStatus.RETRY_WAITING
+        for job in recoverable_jobs:
+            is_retry_due = job.status == GraphIndexJobStatus.RETRY_WAITING and job.available_at <= now
             is_stale_running = (
                 job.status == GraphIndexJobStatus.RUNNING and job.locked_at is not None and job.locked_at < threshold
             )
-            if is_retry or is_stale_running:
+            if is_retry_due or is_stale_running:
                 job.status = GraphIndexJobStatus.PENDING
                 job.available_at = now
                 job.locked_at = None
                 recovered += 1
         return recovered
 
+    def list_dispatchable_jobs(self, *, limit: int) -> Sequence[DatasetGraphIndexJob]:
+        now = naive_utc_now()
+        return self._session.scalars(
+            select(DatasetGraphIndexJob)
+            .join(
+                DatasetGraphConfig,
+                (DatasetGraphConfig.tenant_id == DatasetGraphIndexJob.tenant_id)
+                & (DatasetGraphConfig.dataset_id == DatasetGraphIndexJob.dataset_id),
+            )
+            .where(
+                DatasetGraphIndexJob.status == GraphIndexJobStatus.PENDING,
+                DatasetGraphIndexJob.available_at <= now,
+                DatasetGraphConfig.enabled.is_(True),
+                DatasetGraphConfig.graph_version == DatasetGraphIndexJob.graph_version,
+            )
+            .order_by(DatasetGraphIndexJob.available_at, DatasetGraphIndexJob.created_at)
+            .limit(limit)
+        ).all()
+
     def get(self, job_id: str) -> DatasetGraphIndexJob | None:
         return self._session.get(DatasetGraphIndexJob, job_id)
 
     def claim(self, job_id: str) -> DatasetGraphIndexJob:
-        job = self.get(job_id)
+        """领取 Job，并通过 Document 行锁串行化同一文档的不同 source_version。"""
+        now = naive_utc_now()
+        job = self._session.scalar(
+            select(DatasetGraphIndexJob)
+            .where(
+                DatasetGraphIndexJob.id == job_id,
+                DatasetGraphIndexJob.status.in_(list(claimable_statuses())),
+                DatasetGraphIndexJob.available_at <= now,
+            )
+            .with_for_update()
+        )
         if job is None:
-            raise GraphIndexJobNotFoundError(f"graph_index_job not found: {job_id}")
-        if job.status not in claimable_statuses():
+            existing = self.get(job_id)
+            if existing is None:
+                raise GraphIndexJobNotFoundError(f"graph_index_job not found: {job_id}")
             raise GraphIndexJobClaimError(
-                f"graph_index_job not claimable: status={job.status}",
+                f"graph_index_job not claimable: status={existing.status}",
                 code="graph_index_job_not_claimable",
             )
+
+        # 不同 source_version 会形成不同 Job 行，仅锁 Job 自身无法阻止并发写同一
+        # 文档。额外锁 Document 行，使同文档的领取检查在 PostgreSQL/MySQL 中串行。
+        document_id = self._session.scalar(
+            select(Document.id)
+            .where(
+                Document.id == job.document_id,
+                Document.tenant_id == job.tenant_id,
+                Document.dataset_id == job.dataset_id,
+            )
+            .with_for_update()
+        )
+        if document_id is None:
+            raise GraphIndexJobClaimError(
+                f"graph_index document missing: document_id={job.document_id}",
+                code="graph_index_document_missing",
+            )
+
+        running_job_id = self._session.scalar(
+            select(DatasetGraphIndexJob.id)
+            .where(
+                DatasetGraphIndexJob.tenant_id == job.tenant_id,
+                DatasetGraphIndexJob.dataset_id == job.dataset_id,
+                DatasetGraphIndexJob.document_id == job.document_id,
+                DatasetGraphIndexJob.status == GraphIndexJobStatus.RUNNING,
+                DatasetGraphIndexJob.id != job.id,
+            )
+            .limit(1)
+        )
+        if running_job_id is not None:
+            raise GraphIndexJobClaimError(
+                f"graph_index document already running: job={running_job_id}",
+                code="graph_index_document_busy",
+            )
+
         job.status = GraphIndexJobStatus.RUNNING
-        job.locked_at = naive_utc_now()
-        job.started_at = naive_utc_now()
+        job.locked_at = now
+        job.started_at = now
         return job
 
     def mark_retry_waiting(
@@ -274,14 +434,23 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
         error_code: str,
         error_message: str,
         retry_base_seconds: int,
+        max_retries: int,
     ) -> DatasetGraphIndexJob:
         job = self._require_running_job(job_id)
-        job.status = GraphIndexJobStatus.RETRY_WAITING
+        next_attempt = (job.attempts or 0) + 1
+        now = naive_utc_now()
         job.last_error_code = error_code
         job.last_error_message = error_message
-        job.attempts = (job.attempts or 0) + 1
-        job.available_at = naive_utc_now() + timedelta(seconds=max(0, retry_base_seconds))
+        job.attempts = next_attempt
         job.locked_at = None
+        if next_attempt > max(0, max_retries):
+            job.status = GraphIndexJobStatus.FAILED
+            job.completed_at = now
+            return job
+
+        delay_seconds = max(0, retry_base_seconds) * (2 ** (next_attempt - 1))
+        job.status = GraphIndexJobStatus.RETRY_WAITING
+        job.available_at = now + timedelta(seconds=delay_seconds)
         return job
 
     def mark_failed(
@@ -293,6 +462,21 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
     ) -> DatasetGraphIndexJob:
         job = self._require_running_job(job_id)
         job.status = GraphIndexJobStatus.FAILED
+        job.last_error_code = error_code
+        job.last_error_message = error_message
+        job.completed_at = naive_utc_now()
+        job.locked_at = None
+        return job
+
+    def mark_cancelled(
+        self,
+        job_id: str,
+        *,
+        error_code: str,
+        error_message: str,
+    ) -> DatasetGraphIndexJob:
+        job = self._require_running_job(job_id)
+        job.status = GraphIndexJobStatus.CANCELLED
         job.last_error_code = error_code
         job.last_error_message = error_message
         job.completed_at = naive_utc_now()

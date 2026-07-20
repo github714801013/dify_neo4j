@@ -13,6 +13,7 @@ class FakeSession:
     def __init__(self) -> None:
         self.committed = False
         self.rolled_back = False
+        self.refreshed = False
         self.closed = False
 
     def commit(self) -> None:
@@ -20,6 +21,9 @@ class FakeSession:
 
     def rollback(self) -> None:
         self.rolled_back = True
+
+    def refresh(self, _instance: object) -> None:
+        self.refreshed = True
 
 
 class FakeSessionBegin:
@@ -156,6 +160,25 @@ def test_with_session_read_mode_does_not_commit(monkeypatch: pytest.MonkeyPatch)
     assert not session.rolled_back
     assert session_context.entered
     assert session_context.exited
+    assert session_context.exc_type is None
+
+
+def test_with_session_read_mode_allows_commit_then_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = FakeSession()
+    session_context = FakeSessionContext(session)
+    monkeypatch.setattr(session_module.session_factory, "create_session", lambda: session_context)
+
+    class Handler:
+        @session_module.with_session(write=False)
+        def patch(self, injected_session):
+            injected_session.commit()
+            injected_session.refresh(object())
+            return "ok"
+
+    assert Handler().patch() == "ok"
+
+    assert session.committed
+    assert session.refreshed
     assert session_context.exc_type is None
 
 

@@ -1,12 +1,19 @@
 # Dify GraphRAG Phase 1 原始需求
 
-Last Updated: 2026-07-17
+Last Updated: 2026-07-19
 
 ## 来源与状态源
 
 - 来源计划：`D:\Downloads\dify-graphrag-minimal-invasive-fork-development-guide.md`。
 - 本文件与 `docs/engineering/plans/2026-07-16-graphrag-plan.md` 是本轮唯一状态源。
 - 用户要求：分析计划、生成可落地文档并实施。
+
+## 实现状态校正（2026-07-19）
+
+- Phase 2 的 Graph Job、Reconciler、Celery Beat 注册和 `graph_index` 队列已经实现，原“未实现”状态失效；当前仍存在提交前派发、恢复后不重新派发、领取非原子和最大重试未生效等可靠性缺口。
+- Phase 3 的 LLM 抽取与 Neo4j 写入已经实现。实际路线是 Dify `ModelManager` + 自定义结构化抽取 + neo4j 官方 Python Driver，没有使用 LlamaIndex 或 `plugin_daemon` 中的 `llamaindex_neo4j_graph`。
+- Graph Retrieval、Dataset Retrieval 融合、fail-open、文档/Segment 删除同步、状态运维和真实 Neo4j E2E 尚未实现或验证，GraphRAG 当前不能参与实际知识库问答。
+- 后续阶段和完成标准以 `docs/engineering/plans/2026-07-16-graphrag-plan.md` 的 P0/P1 计划为准；本文件中“本轮范围”保留为 Phase 1 的历史需求边界。
 
 ## 已确认基线
 

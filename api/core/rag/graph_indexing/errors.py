@@ -22,15 +22,6 @@ class GraphIndexError(Exception):
         return str(message) if message else self.code
 
 
-class GraphIndexerNotImplementedError(GraphIndexError):
-    """Phase 3 尚未接入 Graph 抽取适配器时由 Worker 抛出。
-
-    Worker 必须用该异常显式标记未实现，禁止伪成功。
-    """
-
-    code = "graph_indexer_not_implemented"
-
-
 class GraphIndexJobClaimError(GraphIndexError):
     """Worker 领取 Job 时发现 Job 已不在 pending/不可领取。"""
 

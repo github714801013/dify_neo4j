@@ -6,8 +6,8 @@
 - 本模块只描述 Graph Index Job 的数据契约与状态迁移规则，不直接访问数据库；
   持久化由 `repositories.py` 负责。
 - 状态迁移规则集中在本模块，便于在 Reconciler/Worker/测试中复用与校验。
-- Phase 2 不实现实体关系抽取与 Neo4j 写入，因此 `succeeded` 仅在 Phase 3
-  适配器真正写入图数据后才应被 Worker 标记。
+- `succeeded` 仅在 Indexer 完成实体关系抽取并成功写入 Neo4j 后，才由 Worker
+  在独立事务中标记。
 """
 
 from __future__ import annotations

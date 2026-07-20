@@ -223,6 +223,7 @@ def test_single_dataset_retriever_non_economy_run_sorts_context_and_resources():
     callback = _TestHitCallback()
     dataset_retrieval = Mock()
     dataset_retrieval.get_metadata_filter_condition.return_value = (None, None)
+    dataset_retrieval.augment_with_graph.side_effect = lambda **kwargs: kwargs["base_documents"]
     low_segment = SimpleNamespace(
         id="seg-low",
         dataset_id="dataset-1",

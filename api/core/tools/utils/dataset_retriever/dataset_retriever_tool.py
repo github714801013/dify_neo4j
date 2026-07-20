@@ -132,12 +132,25 @@ class DatasetRetrieverTool(DatasetRetrieverBaseTool):
             retrieval_model = dataset.retrieval_model or default_retrieval_model
             retrieval_resource_list: list[RetrievalSourceMetadata] = []
             if dataset.indexing_technique == IndexTechniqueType.ECONOMY:
-                # use keyword table query
                 documents = RetrievalService.retrieve(
                     retrieval_method=RetrievalMethod.KEYWORD_SEARCH,
                     dataset_id=dataset.id,
                     query=query,
                     top_k=self.top_k,
+                    document_ids_filter=document_ids_filter,
+                )
+                documents = dataset_retrieval.augment_with_graph(
+                    session=session,
+                    tenant_id=self.tenant_id,
+                    dataset_id=dataset.id,
+                    query=query,
+                    base_documents=documents,
+                    top_k=self.top_k,
+                    score_threshold=0,
+                    reranking_enable=False,
+                    reranking_mode="reranking_model",
+                    reranking_model=None,
+                    weights=None,
                     document_ids_filter=document_ids_filter,
                 )
                 return str("\n".join([document.page_content for document in documents]))
@@ -161,6 +174,27 @@ class DatasetRetrieverTool(DatasetRetrieverBaseTool):
                     )
                 else:
                     documents = []
+                score_threshold = (
+                    retrieval_model.get("score_threshold", 0.0)
+                    if retrieval_model.get("score_threshold_enabled", False)
+                    else 0.0
+                )
+                reranking_enable = bool(retrieval_model.get("reranking_enable", False))
+                reranking_model = retrieval_model.get("reranking_model") if reranking_enable else None
+                documents = dataset_retrieval.augment_with_graph(
+                    session=session,
+                    tenant_id=self.tenant_id,
+                    dataset_id=dataset.id,
+                    query=query,
+                    base_documents=documents,
+                    top_k=self.top_k,
+                    score_threshold=score_threshold,
+                    reranking_enable=reranking_enable,
+                    reranking_mode=retrieval_model.get("reranking_mode") or "reranking_model",
+                    reranking_model=reranking_model,
+                    weights=retrieval_model.get("weights"),
+                    document_ids_filter=document_ids_filter,
+                )
                 for hit_callback in self.hit_callbacks:
                     hit_callback.on_tool_end(documents, db.session())
                 document_score_list = {}

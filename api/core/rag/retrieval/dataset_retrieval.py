@@ -12,6 +12,7 @@ from flask import Flask, current_app
 from sqlalchemy import and_, func, literal, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from configs import dify_config
 from core.app.app_config.entities import (
     DatasetEntity,
     DatasetRetrieveConfigEntity,
@@ -36,6 +37,8 @@ from core.rag.data_post_processor.data_post_processor import DataPostProcessor, 
 from core.rag.datasource.keyword.jieba.jieba_keyword_table_handler import JiebaKeywordTableHandler
 from core.rag.datasource.retrieval_service import DefaultRetrievalModelDict, RetrievalService
 from core.rag.entities import Condition, DocumentContext, RetrievalSourceMetadata
+from core.rag.graph_retrieval.fusion import fuse_retrieval_documents
+from core.rag.graph_retrieval.service import retrieve_graph_documents
 from core.rag.index_processor.constant.doc_type import DocType
 from core.rag.index_processor.constant.index_type import IndexStructureType, IndexTechniqueType
 from core.rag.index_processor.constant.query_type import QueryType
@@ -597,6 +600,69 @@ class DatasetRetrieval:
             return "\n".join([document_context.content for document_context in document_context_list]), context_files
         return "", context_files
 
+    def augment_with_graph(
+        self,
+        *,
+        session: Session,
+        tenant_id: str,
+        dataset_id: str,
+        query: str,
+        base_documents: list[Document],
+        top_k: int,
+        score_threshold: float,
+        reranking_enable: bool,
+        reranking_mode: str,
+        reranking_model: RerankingModelDict | None,
+        weights: WeightsDict | None,
+        document_ids_filter: list[str] | None,
+    ) -> list[Document]:
+        """把图候选融合到单 Dataset 基础结果，并复用既有 Reranker。
+
+        GraphRAG 关闭、无命中或降级时原样返回基础结果。只有图候选真实加入后
+        才重新执行 DataPostProcessor，避免改变纯基础检索的排序和分数。
+        """
+        if not tenant_id or not query.strip():
+            return base_documents
+
+        graph_batch = retrieve_graph_documents(
+            session=session,
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            query=query,
+            document_ids_filter=document_ids_filter,
+        )
+        if not graph_batch.documents:
+            return base_documents
+
+        fused_documents = fuse_retrieval_documents(
+            base_documents,
+            graph_batch.documents,
+            graph_weight=graph_batch.graph_weight,
+            top_k=top_k,
+        )
+        if not reranking_enable:
+            return fused_documents
+
+        try:
+            processor = DataPostProcessor(tenant_id, reranking_mode, reranking_model, weights, False)
+            return processor.invoke(
+                query=query,
+                documents=fused_documents,
+                score_threshold=score_threshold,
+                top_n=top_k,
+                query_type=QueryType.TEXT_QUERY,
+            )
+        except Exception:
+            if bool(getattr(dify_config, "GRAPH_RAG_FAIL_OPEN", True)):
+                logger.warning(
+                    "graph retrieval rerank degraded tenant=%s dataset=%s",
+                    tenant_id,
+                    dataset_id,
+                    exc_info=True,
+                )
+                return base_documents
+            raise
+
     def single_retrieve(
         self,
         session: Session,
@@ -715,6 +781,20 @@ class DatasetRetrieval:
                             score_threshold=score_threshold,
                             reranking_model=reranking_model,
                             reranking_mode=retrieval_model_config.get("reranking_mode", "reranking_model"),
+                            weights=retrieval_model_config.get("weights", None),
+                            document_ids_filter=document_ids_filter,
+                        )
+                        results = self.augment_with_graph(
+                            session=session,
+                            tenant_id=tenant_id,
+                            dataset_id=selected_dataset.id,
+                            query=query,
+                            base_documents=results,
+                            top_k=top_k,
+                            score_threshold=score_threshold,
+                            reranking_enable=bool(retrieval_model_config.get("reranking_enable", False)),
+                            reranking_mode=retrieval_model_config.get("reranking_mode", "reranking_model"),
+                            reranking_model=reranking_model,
                             weights=retrieval_model_config.get("weights", None),
                             document_ids_filter=document_ids_filter,
                         )
@@ -1126,8 +1206,14 @@ class DatasetRetrieval:
                     else default_retrieval_model
                 )
 
+                documents: list[Document] = []
+                score_threshold = 0.0
+                reranking_enable = bool(retrieval_model.get("reranking_enable", False))
+                reranking_model = retrieval_model.get("reranking_model", None) if reranking_enable else None
+                reranking_mode = retrieval_model.get("reranking_mode") or "reranking_model"
+                weights = retrieval_model.get("weights", None)
+
                 if dataset.indexing_technique == IndexTechniqueType.ECONOMY:
-                    # use keyword table query
                     documents = RetrievalService.retrieve(
                         retrieval_method=RetrievalMethod.KEYWORD_SEARCH,
                         dataset_id=dataset.id,
@@ -1135,29 +1221,41 @@ class DatasetRetrieval:
                         top_k=top_k,
                         document_ids_filter=document_ids_filter,
                     )
-                    if documents:
-                        all_documents.extend(documents)
-                else:
-                    if top_k > 0:
-                        # retrieval source
-                        documents = RetrievalService.retrieve(
-                            retrieval_method=retrieval_model["search_method"],
-                            dataset_id=dataset.id,
-                            query=query,
-                            top_k=retrieval_model.get("top_k") or 4,
-                            score_threshold=retrieval_model.get("score_threshold", 0.0)
-                            if retrieval_model["score_threshold_enabled"]
-                            else 0.0,
-                            reranking_model=retrieval_model.get("reranking_model", None)
-                            if retrieval_model["reranking_enable"]
-                            else None,
-                            reranking_mode=retrieval_model.get("reranking_mode") or "reranking_model",
-                            weights=retrieval_model.get("weights", None),
-                            document_ids_filter=document_ids_filter,
-                            attachment_ids=attachment_ids,
-                        )
+                elif top_k > 0:
+                    score_threshold = (
+                        retrieval_model.get("score_threshold", 0.0)
+                        if retrieval_model.get("score_threshold_enabled", False)
+                        else 0.0
+                    )
+                    documents = RetrievalService.retrieve(
+                        retrieval_method=retrieval_model["search_method"],
+                        dataset_id=dataset.id,
+                        query=query,
+                        top_k=retrieval_model.get("top_k") or 4,
+                        score_threshold=score_threshold,
+                        reranking_model=reranking_model,
+                        reranking_mode=reranking_mode,
+                        weights=weights,
+                        document_ids_filter=document_ids_filter,
+                        attachment_ids=attachment_ids,
+                    )
 
-                        all_documents.extend(documents)
+                documents = self.augment_with_graph(
+                    session=session,
+                    tenant_id=str(getattr(dataset, "tenant_id", "")),
+                    dataset_id=dataset.id,
+                    query=query,
+                    base_documents=documents,
+                    top_k=top_k,
+                    score_threshold=score_threshold,
+                    reranking_enable=reranking_enable,
+                    reranking_mode=reranking_mode,
+                    reranking_model=reranking_model,
+                    weights=weights,
+                    document_ids_filter=document_ids_filter,
+                )
+                if documents:
+                    all_documents.extend(documents)
 
     def _run_retriever_thread(
         self,

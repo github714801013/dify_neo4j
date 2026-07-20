@@ -29,8 +29,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+
+
+@dataclass(frozen=True)
+class SegmentSourceFacts:
+    """参与 source_version 计算的单个有效 Segment 内容事实。"""
+
+    segment_id: str
+    content_sha256: str
+    updated_at_iso: str
+
+    def to_payload(self) -> dict[str, str]:
+        return {
+            "segment_id": self.segment_id,
+            "content_sha256": self.content_sha256,
+            "updated_at": self.updated_at_iso,
+        }
 
 
 @dataclass(frozen=True)
@@ -85,10 +102,32 @@ def build_source_facts(
     )
 
 
-def compute_source_version(facts: DocumentSourceFacts) -> str:
-    """根据事实集合计算 64 位长度的 source_version。
+def build_segment_source_facts(
+    segment_id: str,
+    *,
+    content: str,
+    updated_at: datetime | None,
+) -> SegmentSourceFacts:
+    """构造有效 Segment 的稳定内容事实，不保留原始正文。"""
+    return SegmentSourceFacts(
+        segment_id=str(segment_id),
+        content_sha256=hashlib.sha256((content or "").encode("utf-8")).hexdigest(),
+        updated_at_iso=_normalize_iso(updated_at),
+    )
 
-    返回值为小写十六进制 sha256，长度固定为 64，适合存储在 `String(128)` 列。
+
+def compute_source_version(
+    facts: DocumentSourceFacts,
+    segment_facts: Sequence[SegmentSourceFacts] = (),
+) -> str:
+    """根据 Document 元数据和有效 Segment 内容计算 source_version。
+
+    Segment 先按 ID 排序，因此数据库返回顺序不会导致版本抖动；正文只以 sha256
+    进入载荷，避免日志或调试输出泄露知识库内容。
     """
-    payload = json.dumps(facts.to_payload(), sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    payload = {
+        "document": facts.to_payload(),
+        "segments": [item.to_payload() for item in sorted(segment_facts, key=lambda item: item.segment_id)],
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()

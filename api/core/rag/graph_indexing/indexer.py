@@ -3,106 +3,159 @@
 职责
 ====
 
-- 把单个 Graph Index Job 编排为：加载配置与 segments → LLM 抽取 → Neo4j 写入
-  → 标记 Job 终态。
-- 复用 Phase 2 的状态机（mark_succeeded/mark_retry_waiting/mark_failed），
-  不引入新的 Job 状态。
-- 配置缺失、Neo4j 不可达等不可恢复错误倾向 failed；LLM/解析/临时网络错误
-  倾向 retry_waiting。
+- 把单个 Graph Index Job 编排为：短事务加载配置与 segments → LLM 抽取 →
+  Neo4j 写入 → 返回处理结果。
+- 外部 LLM/Neo4j I/O 不持有数据库事务；Job 状态由 Worker 在独立短事务中
+  持久化。
+- 配置缺失属于不可恢复失败；LLM、解析和临时 Neo4j 异常进入重试。
+- 写入前后核对 Document source_version；过期 Job 精确清理自身图版本并取消，
+  防止旧版本晚完成后反向覆盖新图。
 
 边界
 ====
 
-- 不负责扫描 Document 与领取 Job（Reconciler/Worker 已完成）。
+- 不负责扫描 Document、领取 Job 或提交 Job 状态。
 - 不修改普通索引任务与既有检索行为。
-- 只在 ``_process_job`` 被调用一次，对现有代码的侵入降到最低。
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Protocol
+from dataclasses import dataclass
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from configs import dify_config
 from core.rag.graph.entities import GraphExtractModelConfig, GraphSchema
+from core.rag.graph_indexing.entities import GraphIndexJobStatus
 from core.rag.graph_indexing.extractor import GraphExtractionError, extract_with_llm
-from core.rag.graph_indexing.neo4j_writer import GraphWriteError, write_segment
+from core.rag.graph_indexing.neo4j_writer import (
+    GraphWriteError,
+    discard_document_version,
+    ensure_graph_schema,
+    finalize_document_version,
+    write_segment,
+)
+from core.rag.graph_indexing.versioning import (
+    build_segment_source_facts,
+    build_source_facts,
+    compute_source_version,
+)
 from extensions.ext_database import db
-from models.dataset import DocumentSegment
+from models.dataset import Document, DocumentSegment
 from models.dataset_graph_config import DatasetGraphConfig
 from models.dataset_graph_index_job import DatasetGraphIndexJob
+from models.enums import SegmentStatus
 
 logger = logging.getLogger(__name__)
 
-# 单个 segment 抽取文本的最大长度，避免超长段落撑爆 LLM 上下文。
 _MAX_SEGMENT_CHARS = 8000
-
-# Neo4j 连接配置缺失时的错误特征文本，用于区分"不可恢复"与"可重试"。
 _NEO4J_UNCONFIGURED_MARKER = "neo4j connection config is missing"
 
 
-class _JobRepository(Protocol):
-    """仅声明 indexer 用到的 repository 方法，避免依赖具体实现。"""
+@dataclass(frozen=True)
+class GraphIndexJobRequest:
+    """Worker 提交领取事务后保留的不可变 Job 快照。"""
 
-    def mark_succeeded(self, job_id: str) -> DatasetGraphIndexJob: ...
-    def mark_failed(self, job_id: str, *, error_code: str, error_message: str) -> DatasetGraphIndexJob: ...
-    def mark_retry_waiting(
-        self,
-        job_id: str,
-        *,
-        error_code: str,
-        error_message: str,
-        retry_base_seconds: int,
-    ) -> DatasetGraphIndexJob: ...
+    id: str
+    tenant_id: str
+    dataset_id: str
+    document_id: str
+    graph_version: str
+    source_version: str
+
+    @classmethod
+    def from_job(cls, job: DatasetGraphIndexJob) -> GraphIndexJobRequest:
+        return cls(
+            id=job.id,
+            tenant_id=job.tenant_id,
+            dataset_id=job.dataset_id,
+            document_id=job.document_id,
+            graph_version=job.graph_version,
+            source_version=job.source_version,
+        )
 
 
-def run_indexer(repository: _JobRepository, job: DatasetGraphIndexJob) -> None:
-    """处理单个 Graph Index Job：抽取实体关系并写入 Neo4j。
+@dataclass(frozen=True)
+class GraphIndexOutcome:
+    """Indexer 返回给 Worker 的终态或可重试结果。"""
 
-    失败模式：
-    - 配置缺失 / Neo4j 未配置：mark_failed（不可恢复）。
-    - LLM 调用或解析失败 / Neo4j 写入临时错误：mark_retry_waiting。
-    - 成功：mark_succeeded。
-    """
-    config = _load_graph_config(job)
-    if config is None or not config.enabled or config.extract_model_config is None:
-        repository.mark_failed(
-            job.id,
+    status: GraphIndexJobStatus
+    error_code: str | None = None
+    error_message: str | None = None
+
+    @classmethod
+    def succeeded(cls) -> GraphIndexOutcome:
+        return cls(status=GraphIndexJobStatus.SUCCEEDED)
+
+    @classmethod
+    def retry(cls, *, error_code: str, error_message: str) -> GraphIndexOutcome:
+        return cls(
+            status=GraphIndexJobStatus.RETRY_WAITING,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
+    @classmethod
+    def failed(cls, *, error_code: str, error_message: str) -> GraphIndexOutcome:
+        return cls(
+            status=GraphIndexJobStatus.FAILED,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
+    @classmethod
+    def cancelled(cls, *, error_code: str, error_message: str) -> GraphIndexOutcome:
+        return cls(
+            status=GraphIndexJobStatus.CANCELLED,
+            error_code=error_code,
+            error_message=error_message,
+        )
+
+
+@dataclass(frozen=True)
+class _SegmentInput:
+    id: str
+    content: str
+
+
+@dataclass(frozen=True)
+class _IndexInput:
+    schema: GraphSchema
+    extract_model: GraphExtractModelConfig
+    segments: tuple[_SegmentInput, ...]
+
+
+def run_indexer(job: GraphIndexJobRequest) -> GraphIndexOutcome:
+    """处理单个 Graph Index Job，并返回由 Worker 持久化的结果。"""
+    if not _is_source_version_current(job):
+        return _discard_stale_version(job)
+
+    index_input = _load_index_input(job)
+    if index_input is None:
+        return GraphIndexOutcome.failed(
             error_code="graph_indexer_config_missing",
             error_message="dataset graph config missing or disabled",
         )
-        return
-
-    schema = GraphSchema.model_validate(config.schema_json)
-    extract_model = GraphExtractModelConfig.model_validate(config.extract_model_config)
-
-    segments = db.session.scalars(
-        select(DocumentSegment)
-        .where(
-            DocumentSegment.document_id == job.document_id,
-            DocumentSegment.tenant_id == job.tenant_id,
-            DocumentSegment.enabled.is_(True),
-        )
-        .order_by(DocumentSegment.position.asc())
-    ).all()
 
     total_relations = 0
     processed_segments = 0
     try:
-        for segment in segments:
-            text = segment.content[:_MAX_SEGMENT_CHARS] if segment.content else ""
+        ensure_graph_schema()
+        for segment in index_input.segments:
+            text = segment.content[:_MAX_SEGMENT_CHARS]
             if not text.strip():
                 continue
             extraction = extract_with_llm(
                 tenant_id=job.tenant_id,
-                provider=extract_model.provider,
-                model=extract_model.model,
-                temperature=extract_model.temperature,
-                max_tokens=extract_model.max_tokens,
+                provider=index_input.extract_model.provider,
+                model=index_input.extract_model.model,
+                temperature=index_input.extract_model.temperature,
+                max_tokens=index_input.extract_model.max_tokens,
                 segment_text=text,
-                schema=schema,
+                schema=index_input.schema,
+                strict=index_input.extract_model.strict,
+                max_triplets_per_chunk=index_input.extract_model.max_triplets_per_chunk,
             )
             total_relations += write_segment(
                 tenant_id=job.tenant_id,
@@ -110,54 +163,166 @@ def run_indexer(repository: _JobRepository, job: DatasetGraphIndexJob) -> None:
                 document_id=job.document_id,
                 segment_id=segment.id,
                 graph_version=job.graph_version,
+                source_version=job.source_version,
                 extraction=extraction,
             )
             processed_segments += 1
-    except GraphExtractionError as ex:
-        repository.mark_retry_waiting(
-            job.id,
-            error_code="graph_indexer_extract_failed",
-            error_message=ex.args[0] if ex.args else "extract failed",
-            retry_base_seconds=dify_config.GRAPH_INDEX_RETRY_BASE_SECONDS,
+
+        if not _is_source_version_current(job):
+            return _discard_stale_version(job)
+
+        finalize_document_version(
+            tenant_id=job.tenant_id,
+            dataset_id=job.dataset_id,
+            document_id=job.document_id,
+            graph_version=job.graph_version,
+            source_version=job.source_version,
         )
+        if not _is_source_version_current(job):
+            return _discard_stale_version(job)
+    except GraphExtractionError as ex:
+        message = ex.args[0] if ex.args else "extract failed"
         logger.warning("graph_index extract failed job=%s err=%s", job.id, ex)
-        return
+        return GraphIndexOutcome.retry(
+            error_code="graph_indexer_extract_failed",
+            error_message=message,
+        )
     except GraphWriteError as ex:
         message = ex.args[0] if ex.args else "write failed"
-        # Neo4j 连接配置缺失属不可恢复错误，直接失败；其余按重试处理。
+        logger.warning("graph_index write failed job=%s err=%s", job.id, ex)
         if _NEO4J_UNCONFIGURED_MARKER in message:
-            repository.mark_failed(
-                job.id,
+            return GraphIndexOutcome.failed(
                 error_code="graph_indexer_neo4j_unconfigured",
                 error_message=message,
             )
-        else:
-            repository.mark_retry_waiting(
-                job.id,
-                error_code="graph_indexer_write_failed",
-                error_message=message,
-                retry_base_seconds=dify_config.GRAPH_INDEX_RETRY_BASE_SECONDS,
-            )
-        logger.warning("graph_index write failed job=%s err=%s", job.id, ex)
-        return
+        return GraphIndexOutcome.retry(
+            error_code="graph_indexer_write_failed",
+            error_message=message,
+        )
 
-    repository.mark_succeeded(job.id)
     logger.info(
-        "graph_index job succeeded job=%s segments=%s relations=%s",
+        "graph_index job processed job=%s segments=%s relations=%s",
         job.id,
         processed_segments,
         total_relations,
     )
+    return GraphIndexOutcome.succeeded()
 
 
-def _load_graph_config(job: DatasetGraphIndexJob) -> DatasetGraphConfig | None:
-    """按 tenant+dataset 加载 GraphConfig。缺失返回 None，由调用方标记失败。"""
-    return db.session.scalar(
-        select(DatasetGraphConfig).where(
-            DatasetGraphConfig.tenant_id == job.tenant_id,
-            DatasetGraphConfig.dataset_id == job.dataset_id,
+def _discard_stale_version(job: GraphIndexJobRequest) -> GraphIndexOutcome:
+    """清理过期 Job 的精确图版本，并返回 cancelled 或可重试结果。"""
+    try:
+        discard_document_version(
+            tenant_id=job.tenant_id,
+            dataset_id=job.dataset_id,
+            document_id=job.document_id,
+            graph_version=job.graph_version,
+            source_version=job.source_version,
         )
+    except GraphWriteError as ex:
+        message = ex.args[0] if ex.args else "discard stale graph version failed"
+        logger.warning("graph_index stale version discard failed job=%s err=%s", job.id, ex)
+        if _NEO4J_UNCONFIGURED_MARKER in message:
+            return GraphIndexOutcome.failed(
+                error_code="graph_indexer_neo4j_unconfigured",
+                error_message=message,
+            )
+        return GraphIndexOutcome.retry(
+            error_code="graph_indexer_write_failed",
+            error_message=message,
+        )
+
+    logger.info(
+        "graph_index job cancelled because source version is stale job=%s source_version=%s",
+        job.id,
+        job.source_version,
+    )
+    return GraphIndexOutcome.cancelled(
+        error_code="graph_indexer_source_stale",
+        error_message="document source version changed while graph indexing",
     )
 
 
-__all__ = ["run_indexer"]
+def _is_source_version_current(job: GraphIndexJobRequest) -> bool:
+    """核对 Job source_version 是否仍对应当前有效 Document。"""
+    with Session(db.engine, expire_on_commit=False) as session:
+        document = session.scalar(
+            select(Document).where(
+                Document.id == job.document_id,
+                Document.tenant_id == job.tenant_id,
+                Document.dataset_id == job.dataset_id,
+            )
+        )
+        if (
+            document is None
+            or not document.enabled
+            or document.archived
+            or document.indexing_status != "completed"
+            or document.completed_at is None
+        ):
+            return False
+        segments = session.scalars(
+            select(DocumentSegment)
+            .where(
+                DocumentSegment.tenant_id == job.tenant_id,
+                DocumentSegment.dataset_id == job.dataset_id,
+                DocumentSegment.document_id == job.document_id,
+                DocumentSegment.enabled.is_(True),
+                DocumentSegment.status == SegmentStatus.COMPLETED,
+            )
+            .order_by(DocumentSegment.position, DocumentSegment.id)
+        ).all()
+        facts = build_source_facts(
+            document.id,
+            updated_at=document.updated_at,
+            completed_at=document.completed_at,
+            batch=document.batch,
+            word_count=document.word_count,
+        )
+        segment_facts = [
+            build_segment_source_facts(
+                segment.id,
+                content=segment.content or "",
+                updated_at=segment.updated_at,
+            )
+            for segment in segments
+        ]
+        return compute_source_version(facts, segment_facts) == job.source_version
+
+
+def _load_index_input(job: GraphIndexJobRequest) -> _IndexInput | None:
+    """在短数据库会话中加载配置和 Segment 快照，关闭会话后才执行外部 I/O。"""
+    with Session(db.engine, expire_on_commit=False) as session:
+        config = session.scalar(
+            select(DatasetGraphConfig).where(
+                DatasetGraphConfig.tenant_id == job.tenant_id,
+                DatasetGraphConfig.dataset_id == job.dataset_id,
+            )
+        )
+        if config is None or not config.enabled or config.extract_model_config is None:
+            return None
+
+        segments = session.scalars(
+            select(DocumentSegment)
+            .where(
+                DocumentSegment.document_id == job.document_id,
+                DocumentSegment.tenant_id == job.tenant_id,
+                DocumentSegment.dataset_id == job.dataset_id,
+                DocumentSegment.enabled.is_(True),
+                DocumentSegment.status == SegmentStatus.COMPLETED,
+            )
+            .order_by(DocumentSegment.position.asc())
+        ).all()
+        segment_inputs = tuple(_SegmentInput(id=segment.id, content=segment.content or "") for segment in segments)
+        return _IndexInput(
+            schema=GraphSchema.model_validate(config.schema_json),
+            extract_model=GraphExtractModelConfig.model_validate(config.extract_model_config),
+            segments=segment_inputs,
+        )
+
+
+__all__ = [
+    "GraphIndexJobRequest",
+    "GraphIndexOutcome",
+    "run_indexer",
+]

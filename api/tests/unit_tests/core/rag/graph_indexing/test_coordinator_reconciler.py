@@ -8,7 +8,7 @@ from core.rag.graph_indexing.coordinator import GraphIndexJobCoordinator
 from core.rag.graph_indexing.reconciler import GraphIndexReconciler
 from core.rag.graph_indexing.repositories import SqlAlchemyGraphIndexJobRepository
 from libs.datetime_utils import naive_utc_now
-from models.dataset import Document
+from models.dataset import Document, DocumentSegment
 from models.dataset_graph_config import DatasetGraphConfig
 from models.dataset_graph_index_job import DatasetGraphIndexJob
 
@@ -26,6 +26,7 @@ def db_session(_unit_test_engine):
             DatasetGraphConfig.__table__,
             DatasetGraphIndexJob.__table__,
             Document.__table__,
+            DocumentSegment.__table__,
         ],
     )
     yield session
@@ -34,21 +35,13 @@ def db_session(_unit_test_engine):
 
 
 @pytest.fixture
-def dispatched():
-    return []
-
-
-@pytest.fixture
 def repository(db_session):
     return SqlAlchemyGraphIndexJobRepository(db_session)
 
 
 @pytest.fixture
-def coordinator(repository, dispatched):
-    def _dispatch(job_id: str) -> None:
-        dispatched.append(job_id)
-
-    return GraphIndexJobCoordinator(repository=repository, dispatcher=_dispatch)
+def coordinator(repository):
+    return GraphIndexJobCoordinator(repository=repository)
 
 
 @pytest.fixture
@@ -84,7 +77,7 @@ def _make_document(*, tenant_id, dataset_id, batch="b1", word_count=10, complete
 
 
 class TestCoordinatorEnsureJob:
-    def test_creates_job_and_dispatches(self, coordinator, dispatched, db_session):
+    def test_creates_job_without_dispatching_before_commit(self, coordinator, db_session):
         tenant_id, dataset_id = str(uuid4()), str(uuid4())
         doc = _make_document(tenant_id=tenant_id, dataset_id=dataset_id)
         db_session.add(doc)
@@ -97,9 +90,8 @@ class TestCoordinatorEnsureJob:
             graph_version="v1",
         )
         assert job_id is not None
-        assert dispatched == [job_id]
 
-    def test_duplicate_call_returns_none_and_no_dispatch(self, coordinator, dispatched, db_session):
+    def test_duplicate_call_returns_none(self, coordinator, db_session):
         tenant_id, dataset_id = str(uuid4()), str(uuid4())
         doc = _make_document(tenant_id=tenant_id, dataset_id=dataset_id)
         db_session.add(doc)
@@ -113,7 +105,6 @@ class TestCoordinatorEnsureJob:
         )
         assert first is not None
         assert second is None
-        assert len(dispatched) == 1
 
     def test_source_version_change_creates_new_job(self, coordinator, db_session):
         tenant_id, dataset_id = str(uuid4()), str(uuid4())
@@ -147,20 +138,6 @@ class TestCoordinatorEnsureJob:
         assert second is not None
         assert first != second
 
-    def test_dispatch_failure_does_not_break_creation(self, repository, db_session):
-        def _boom(job_id: str) -> None:
-            raise RuntimeError("boom")
-
-        coordinator = GraphIndexJobCoordinator(repository=repository, dispatcher=_boom)
-        tenant_id, dataset_id = str(uuid4()), str(uuid4())
-        doc = _make_document(tenant_id=tenant_id, dataset_id=dataset_id)
-        db_session.add(doc)
-        db_session.flush()
-        job_id = coordinator.ensure_job_for_document(
-            tenant_id=tenant_id, dataset_id=dataset_id, document=doc, graph_version="v1"
-        )
-        assert job_id is not None
-
 
 class TestReconcilerEnabledFlag:
     def test_disabled_global_flag_skips(self, reconciler, db_session, monkeypatch):
@@ -171,9 +148,10 @@ class TestReconcilerEnabledFlag:
         db_session.add(doc)
         db_session.flush()
 
-        reconciler.reconcile()
+        dispatchable = reconciler.reconcile()
         jobs = db_session.query(DatasetGraphIndexJob).all()
         assert jobs == []
+        assert dispatchable == []
 
     def test_only_enabled_configs_processed(self, reconciler, db_session, monkeypatch):
         monkeypatch.setattr(reconciler, "_is_enabled", lambda: True)
@@ -187,9 +165,10 @@ class TestReconcilerEnabledFlag:
         db_session.add_all([doc_enabled, doc_disabled])
         db_session.flush()
 
-        reconciler.reconcile()
+        dispatchable = reconciler.reconcile()
         jobs = db_session.query(DatasetGraphIndexJob).all()
         assert {j.dataset_id for j in jobs} == {enabled.dataset_id}
+        assert dispatchable == [jobs[0].id]
 
     def test_only_completed_non_archived_documents_processed(self, reconciler, db_session, monkeypatch):
         monkeypatch.setattr(reconciler, "_is_enabled", lambda: True)
@@ -204,9 +183,10 @@ class TestReconcilerEnabledFlag:
         db_session.add_all([completed, indexing, archived])
         db_session.flush()
 
-        reconciler.reconcile()
+        dispatchable = reconciler.reconcile()
         jobs = db_session.query(DatasetGraphIndexJob).all()
         assert {j.document_id for j in jobs} == {completed.id}
+        assert dispatchable == [jobs[0].id]
 
     def test_reconcile_is_idempotent_across_runs(self, reconciler, db_session, monkeypatch):
         monkeypatch.setattr(reconciler, "_is_enabled", lambda: True)
@@ -217,10 +197,12 @@ class TestReconcilerEnabledFlag:
         db_session.add(doc)
         db_session.flush()
 
-        reconciler.reconcile()
-        reconciler.reconcile()
+        first_dispatch = reconciler.reconcile()
+        second_dispatch = reconciler.reconcile()
         jobs = db_session.query(DatasetGraphIndexJob).all()
         assert len(jobs) == 1
+        assert first_dispatch == [jobs[0].id]
+        assert second_dispatch == [jobs[0].id]
 
     def test_tenant_isolation(self, reconciler, db_session, monkeypatch):
         monkeypatch.setattr(reconciler, "_is_enabled", lambda: True)
@@ -234,10 +216,11 @@ class TestReconcilerEnabledFlag:
         db_session.add_all([doc_a, doc_b])
         db_session.flush()
 
-        reconciler.reconcile()
+        dispatchable = reconciler.reconcile()
         jobs = db_session.query(DatasetGraphIndexJob).all()
         by_tenant = {j.tenant_id for j in jobs}
         assert by_tenant == {tenant_a, tenant_b}
+        assert set(dispatchable) == {job.id for job in jobs}
         for j in jobs:
             if j.tenant_id == tenant_a:
                 assert j.dataset_id == dataset_a
@@ -256,6 +239,7 @@ class TestReconcilerEnabledFlag:
         db_session.add_all(docs)
         db_session.flush()
 
-        reconciler.reconcile()
+        dispatchable = reconciler.reconcile()
         jobs = db_session.query(DatasetGraphIndexJob).all()
         assert {j.document_id for j in jobs} == {d.id for d in docs}
+        assert set(dispatchable) == {job.id for job in jobs}

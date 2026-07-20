@@ -176,6 +176,8 @@ class GraphResult(BaseModel):
     graph_rank: int = Field(ge=1)
     graph_distance: int = Field(ge=0, le=1)
     graph_path: list[str] = Field(default_factory=list)
+    matched_entities: list[str] = Field(default_factory=list)
+    relation_types: list[str] = Field(default_factory=list)
 
 
 class KnowledgeCandidate(BaseModel):

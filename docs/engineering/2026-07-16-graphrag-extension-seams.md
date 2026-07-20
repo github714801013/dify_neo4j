@@ -27,3 +27,14 @@ Phase 1 采用独立的 `dataset_graph_configs` 表和 `api/core/rag/graph/` 新
 - 后续仅在 Phase 2/5 为索引和检索增加少量 Hook；核心 GraphRAG 逻辑保持在新增模块内。
 - Graph 数据库依赖和 LlamaIndex 版本在 Phase 3 基于实际 Adapter API 另行锁定，避免提前刷新锁文件。
 
+## 2026-07-19 实现路线修订
+
+Phase 3 已采用 Dify `ModelManager` 完成结构化实体关系抽取，并通过 neo4j 官方 Python Driver 直接写入 Neo4j。第一期继续沿用该直接 Adapter，以减少重新改造成本并优先打通图检索闭环；LlamaIndex/plugin_daemon Adapter 调整为后续可替换实现。
+
+该修订不改变独立模块、独立配置表、普通索引失败隔离和最小上游 Hook 原则。新增约束如下：
+
+- Graph 抽取与 Neo4j 读写仍集中在独立 Graph 模块，不散落到普通索引和 Workflow 节点。
+- Dataset Retrieval 只增加调用 Graph Retrieval/Fusion 服务的最小 Hook。
+- Neo4j 异常必须 fail-open，基础检索继续可用。
+- 后续替换 Adapter 时不得改变 Job、Graph Retrieval 和统一候选结果的领域契约。
+

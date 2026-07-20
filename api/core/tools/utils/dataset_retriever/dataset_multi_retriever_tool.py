@@ -13,6 +13,7 @@ from core.rag.entities import RetrievalSourceMetadata
 from core.rag.index_processor.constant.index_type import IndexTechniqueType
 from core.rag.models.document import Document as RagDocument
 from core.rag.rerank.rerank_model import RerankModelRunner
+from core.rag.retrieval.dataset_retrieval import DatasetRetrieval
 from core.rag.retrieval.retrieval_methods import RetrievalMethod
 from core.tools.utils.dataset_retriever.dataset_retriever_base_tool import DatasetRetrieverBaseTool
 from extensions.ext_database import db
@@ -172,32 +173,45 @@ class DatasetMultiRetrieverTool(DatasetRetrieverBaseTool):
             # get retrieval model , if the model is not setting , using default
             retrieval_model = dataset.retrieval_model or default_retrieval_model
 
+            documents: list[RagDocument] = []
+            per_dataset_top_k = retrieval_model.get("top_k") or 4
             if dataset.indexing_technique == IndexTechniqueType.ECONOMY:
-                # use keyword table query
                 documents = RetrievalService.retrieve(
                     retrieval_method=RetrievalMethod.KEYWORD_SEARCH,
                     dataset_id=dataset.id,
                     query=query,
-                    top_k=retrieval_model.get("top_k") or 4,
+                    top_k=per_dataset_top_k,
                 )
-                if documents:
-                    all_documents.extend(documents)
-            else:
-                if self.top_k > 0:
-                    # retrieval source
-                    documents = RetrievalService.retrieve(
-                        retrieval_method=retrieval_model["search_method"],
-                        dataset_id=dataset.id,
-                        query=query,
-                        top_k=retrieval_model.get("top_k") or 4,
-                        score_threshold=retrieval_model.get("score_threshold", 0.0)
-                        if retrieval_model["score_threshold_enabled"]
-                        else 0.0,
-                        reranking_model=retrieval_model.get("reranking_model", None)
-                        if retrieval_model["reranking_enable"]
-                        else None,
-                        reranking_mode=retrieval_model.get("reranking_mode") or "reranking_model",
-                        weights=retrieval_model.get("weights", None),
-                    )
+            elif self.top_k > 0:
+                documents = RetrievalService.retrieve(
+                    retrieval_method=retrieval_model["search_method"],
+                    dataset_id=dataset.id,
+                    query=query,
+                    top_k=per_dataset_top_k,
+                    score_threshold=retrieval_model.get("score_threshold", 0.0)
+                    if retrieval_model["score_threshold_enabled"]
+                    else 0.0,
+                    reranking_model=retrieval_model.get("reranking_model", None)
+                    if retrieval_model["reranking_enable"]
+                    else None,
+                    reranking_mode=retrieval_model.get("reranking_mode") or "reranking_model",
+                    weights=retrieval_model.get("weights", None),
+                )
 
-                    all_documents.extend(documents)
+            dataset_retrieval = DatasetRetrieval()
+            documents = dataset_retrieval.augment_with_graph(
+                session=db.session,
+                tenant_id=self.tenant_id,
+                dataset_id=dataset.id,
+                query=query,
+                base_documents=documents,
+                top_k=per_dataset_top_k,
+                score_threshold=0,
+                reranking_enable=False,
+                reranking_mode="reranking_model",
+                reranking_model=None,
+                weights=None,
+                document_ids_filter=None,
+            )
+            if documents:
+                all_documents.extend(documents)

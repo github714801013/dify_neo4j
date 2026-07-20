@@ -1,8 +1,57 @@
-# Dify GraphRAG Phase 0-1 实施计划
+# Dify GraphRAG 可用化实施计划
 
-Last Updated: 2026-07-17
+Last Updated: 2026-07-19
 
 状态源：`docs/engineering/specs/2026-07-16-graphrag-raw-requirements.md`。
+
+## 当前结论
+
+当前代码已经具备 Dataset 配置、Graph Job、Reconciler、LLM 抽取和 Neo4j 写入能力，最多只能完成“尝试构图”。图查询、候选 Segment 映射、向量与图融合、删除同步和真实端到端验收尚未完成，因此 GraphRAG 还不能参与 Dify 的实际知识库问答。
+
+“图可以使用”的最低完成定义：
+
+1. 启用 GraphRAG 的 Dataset 能稳定把现有和新增文档写入 Neo4j。
+2. 用户问题能查询 Neo4j，并返回属于当前 Dataset 的有效 `segment_id`。
+3. 图候选能进入 Dataset Retrieval，与向量/关键词候选融合并经过既有 Reranker。
+4. Neo4j、抽图模型或 Graph Worker 异常时，基础检索自动降级且不受影响。
+5. 文档更新、禁用、归档和删除后，旧图数据不再参与检索。
+
+当前最短可用路径：
+
+```text
+修复 Job 可靠性
+  -> 修正图写入与版本清理
+  -> 补齐文档/Segment 生命周期
+  -> 实现 Graph Retrieval
+  -> 接入 Dataset Retrieval 融合
+  -> 完成真实 Neo4j 端到端验收
+```
+
+## 当前状态审计
+
+| 阶段 | 当前状态 | 结论 |
+| --- | --- | --- |
+| Phase 0：基线与扩展边界 | 已完成 | 独立 Graph 模块与独立配置表方案可继续使用 |
+| Phase 1：配置、Schema、迁移、UI | 已实现，保存链路仍在回归修复 | 当前工作区仍有 Dataset PATCH 事务修复未完成验证 |
+| Phase 2：Job、Reconciler、队列 | 已实现，存在阻塞缺陷 | Job 可能永久停在 `pending`，原子领取与重试契约未完成 |
+| Phase 3：LLM 抽取与 Neo4j 写入 | 已实现，未完成可用性验收 | 缺少写入正确性、版本清理、正式测试和真实 Neo4j 验证 |
+| Phase 4：状态查询与运维 | 未开始 | 不阻塞最小演示，阻塞生产运维 |
+| Phase 5：Graph Retrieval | 未开始 | 图无法被用户问题查询，是核心功能缺口 |
+| Phase 6：统一检索与降级 | 未开始 | 图结果无法参与回答，fail-open 配置未生效 |
+| Phase 7：E2E、对账与升级演练 | 未开始 | 尚不能证明生产可用 |
+
+## 实现路线校正
+
+原方案要求优先通过 `plugin_daemon` 调用 `llamaindex_neo4j_graph`，且不增加 Python Neo4j/LlamaIndex 依赖。当前实现实际采用：
+
+```text
+Dify ModelManager
+  -> 自定义 Prompt 与 JSON 解析
+  -> neo4j 官方 Python Driver
+  -> Neo4j
+```
+
+仓库已增加 `neo4j>=5.28.0,<6.0.0`，当前代码没有使用 LlamaIndex，也没有调用 `llamaindex_neo4j_graph`。第一期按现有直接 Adapter 打通最小可用链路；LlamaIndex/plugin Adapter 作为后续可替换实现。该决策需要同步补充到 ADR。
 
 ## Phase 0 基线结论
 
@@ -19,7 +68,7 @@ flowchart LR
 - 更新、删除和清理入口位于 `api/tasks/document_indexing_*_task.py`、`delete_segment_from_index_task.py`、`clean_dataset_task.py`。
 - 检索入口：`api/core/rag/retrieval/dataset_retrieval.py`；Workflow 适配入口：`api/core/workflow/nodes/knowledge_retrieval/retrieval.py`。
 - 既有异步索引队列为 `dataset` 和 `priority_dataset`；Graph Worker 仅在 Phase 2 设计独立队列。
-- LlamaIndex / Neo4j 尚未依赖，因此 Phase 1 只建立不依赖具体图数据库的领域边界。
+- Phase 1 启动时 LlamaIndex / Neo4j 尚未依赖，因此当时只建立不依赖具体图数据库的领域边界；当前实现状态见“实现路线校正”。
 
 ## ADR
 
@@ -88,110 +137,252 @@ flowchart LR
   - 验收：图 Top K、最大深度、超时、权重和抽图温度/三元组数不再使用裸输入作为主要控件；只读/关闭态行为保持。
   - 2026-07-17 验证：GraphRAG validation 测试 `4 passed`；索引设置组件回归测试 `24 passed`；GraphRAG 组件 ESLint 通过；前端 `pnpm type-check` 通过。
 
-## 后续阶段与阻塞边
+## P0：把图真正用起来前必须完成
 
-正式方案已确认：第一期以 Reconciler 保证最终一致，不直接修改普通索引核心任务；实时 Hook 仅作为后续可选优化。
+### P0-1 修复 Graph Job 事务、投递与重试闭环
 
-| 阶段 | 依赖 | 本轮状态 |
-| --- | --- | --- |
-| Phase 2：Graph Job 表与 Reconciler | Phase 1 配置模型 | 已确认方案，未实现 |
-| Phase 3：Graph Worker 与插件/Neo4j Adapter | Phase 2 Job/版本/错误契约 | 已确认方案，未实现 |
-| Phase 4：状态查询与运维 | Phase 3 可观测任务状态 | 已确认方案，未实现 |
-| Phase 5：Graph Retrieval | Phase 3 图索引与 Neo4j 查询模板 | 未开始 |
-| Phase 6：统一检索 | Phase 5 候选结果与融合 | 未开始 |
-| Phase 7：升级演练与对账 | Phase 2-5 运行数据 | 未开始 |
+当前已确认问题：
 
-## Phase 2 正式实施计划：Job + Reconciler
+1. Reconciler 在数据库事务提交前调用 Celery `delay`。Worker 可能先于提交执行，读取不到 Job 后退出。
+2. 已存在的 `pending` Job 不会再次投递；恢复后的 `retry_waiting` 或超时 `running` Job 只被改回 `pending`，没有重新派发。
+3. Repository 的 `claim()` 采用“查询后修改”，没有条件更新或行锁，不满足原子领取契约。
+4. Worker 在同一数据库事务中执行 LLM 和 Neo4j 外部 I/O，事务持有时间过长，且 `running` 状态在提交前不可见。
+5. `GRAPH_INDEX_MAX_RETRIES` 尚未生效；`available_at` 与指数退避也没有被严格执行。
+6. 并发幂等插入冲突会回滚外层 Session，和仓储注释中的嵌套事务契约不一致。
 
-### 目标
+必须完成：
 
-在不修改 `IndexProcessorFactory`、普通文档索引任务、Dataset Retrieval、Workflow 和 Reranker 的前提下，可靠发现并投递需要图索引的文档。
+- Job 事务提交后再派发，可采用 after-commit dispatcher 或独立 Outbox；禁止提交前派发。
+- Repository 增加“查询当前可派发 Job”能力，Reconciler 统一重新派发 `pending`、到期 `retry_waiting` 和恢复后的 stale Job。
+- 使用条件更新或 `SELECT ... FOR UPDATE` 完成原子领取，仅允许一次 `pending -> running` 成功。
+- Worker 拆分为三段事务：领取并提交、执行外部 I/O、记录终态并提交。
+- 严格判断 `available_at <= now`，实现指数退避和最大重试次数；达到上限后进入 `failed`。
+- 幂等插入使用 savepoint/嵌套事务，唯一键冲突不能破坏外层 Reconciler 事务。
 
-### 变更范围
+验收：
 
-新增并集中在以下位置：
+- Job 提交前启动 Worker 不会丢任务。
+- 同一 Job 并发消费时只有一个 Worker 获得执行权。
+- Celery 派发失败后，下一轮 Reconciler 能重新派发。
+- Worker 崩溃后，超时 Job 能恢复并重新执行。
+- 重试等待和最大次数符合配置。
 
-```text
-api/core/rag/graph_indexing/
-api/migrations/versions/<graph_index_jobs_migration>.py
-api/tasks/graph_indexing_task.py
-api/tasks/graph_reconcile_task.py
-```
+### P0-2 修正图数据模型和写入正确性
 
-必要的上游改动仅限于独立 Celery Beat 任务注册。不得把图抽取或 Neo4j 写入嵌入普通索引任务。
+当前已确认问题：
 
-### Job 契约
+1. 同一事实由多个 Segment 支撑时，关系上的单个 `segment_id` 会被后续写入覆盖，无法保留多证据。
+2. 新 `source_version` 或 `graph_version` 写入后，没有清理旧版本中已经不存在的实体、关系和 MENTIONS 证据。
+3. `Segment` 节点缺少完整的 tenant、dataset、document、graph_version 隔离字段。
+4. `max_triplets_per_chunk` 和 `strict` 已保存到配置，抽取逻辑尚未实际使用。
+5. 尚未发现 Neo4j 唯一约束和查询索引初始化。
+6. `run_indexer`、Neo4j Writer、Cypher 参数和失败映射没有正式单元测试或集成测试。
 
-表名：`dataset_graph_index_jobs`。
+必须完成：
 
-唯一键：
+- 将“事实关系”和“Segment 证据”分离，确保一个事实可关联多个 Segment，禁止单值覆盖证据。
+- 所有图节点和证据关系带 `tenant_id`、`dataset_id`、`document_id`、`graph_version`，查询时强制过滤。
+- 文档新版本全部写入成功后再清理旧版本；写入失败时保留上一个成功版本。
+- 抽取数量受 `max_triplets_per_chunk` 限制，并明确 `strict=true/false` 的运行语义。
+- 增加 Entity、Segment、证据关系的唯一约束与 Dataset/版本查询索引。
+- 增加 Indexer/Writer 单元测试和临时 Neo4j 集成测试，不连接生产库或共享测试库。
 
-```text
-(dataset_id, document_id, source_version, graph_version)
-```
-
-状态：
-
-```text
-pending -> running -> succeeded
-                 -> retry_waiting -> pending
-                 -> failed
-pending/running -> stale 或 cancelled
-```
-
-Reconciler 必须使用幂等插入；Worker 必须使用原子领取；超时 `running` Job 必须可恢复。
-
-### Reconciler 行为
-
-1. 读取启用 GraphRAG 的 Dataset。
-2. 分批读取状态为 `completed` 的 Document。
-3. 计算文档当前 `source_version`。
-4. 检查是否已有同版本成功 Job。
-5. 幂等创建 `pending` Job。
-6. 按批次投递到独立 `graph_index` 队列。
-7. 扫描并恢复超时 Job。
-
-首次启用 Dataset 时自动回填历史文档，但受批量、并发和每 Dataset inflight 限制保护。配置保存接口本身不执行扫描、抽取或 Neo4j 写入。
-
-### 失败隔离
-
-- 图索引失败不能改变普通索引结果。
-- 插件、Neo4j、网络和数据库暂时性异常进入指数退避重试。
-- 非法数据、权限错误和超过最大重试次数进入 `failed`。
-- Job 状态和结构化日志至少包含 `tenant_id`、`dataset_id`、`document_id`、`job_id`、`source_version`、`graph_version`、`attempt`、`status` 和错误摘要。
-
-### Phase 3 Adapter 边界
+实施模型：
 
 ```text
-GraphIndexWorker
-    -> GraphExtractor Port
-    -> PluginExtractor Adapter
-    -> plugin_daemon Tool/RPC
-
-GraphIndexWorker
-    -> GraphStore Port
-    -> Neo4jStore Adapter
-    -> Neo4j
+(GraphSegment)-[:MENTIONS]->(GraphEntity)
+(GraphSegment)-[:EVIDENCE_FOR]->(GraphFact)
+(GraphEntity)-[:FACT_SOURCE]->(GraphFact)-[:FACT_TARGET]->(GraphEntity)
 ```
 
-正式实现前必须核对当前 `llamaindex_neo4j_graph` 的真实 Tool/RPC 入参和返回契约。第一期不新增 Python Neo4j/LlamaIndex 依赖。
+- `GraphEntity`、`GraphFact`、`GraphSegment` 均以 tenant、Dataset、Document、`graph_version`、`source_version` 作为隔离和版本边界。
+- `GraphFact.relation` 保存业务关系类型，不再把 LLM 关系值直接作为 Neo4j 动态关系类型。
+- 同一事实由多个 Segment 支撑时，共享一个 `GraphFact`，每个 Segment 分别建立 `EVIDENCE_FOR`。
+- 每次 Segment 写入在单个 Neo4j 事务内替换该 Segment 的当前版本证据，并清理当前版本中失去证据的孤儿事实/实体，避免 LLM 重试结果变化时累积脏图。
+- 同一 Document 的不同 `source_version` Job 通过 Document 行锁串行领取；写入前后再次核对当前版本，过期 Job 精确清理自身临时图并进入 `cancelled`，避免旧 Job 晚完成后覆盖新图。
+- 单个 Job 的全部 Segment 写入成功后才执行版本切换：删除同文档的旧 `source_version`/`graph_version`；任一写入失败时不清理旧版本。
+- `strict=true` 时严格执行 `allowed_triples`；`strict=false` 时仍限制实体类型和关系类型，但允许声明类型之间的非模板组合。
+- `max_triplets_per_chunk` 在 schema 过滤和去重后截断，保证单 Segment 的实际写入上限。
+- 未来 Graph Retrieval 只读取 Job 状态为 `succeeded`、且与当前 Document source_version 一致的 `GraphEntity`、`GraphFact`、`GraphSegment`；重试、取消或已经过期的版本不得参与查询。
+- 旧版 `Entity`/`Segment` 数据不进入新查询链路，清理动作放入重建/生命周期阶段。
 
-### 升级与回滚检查点
+验收：
 
-- 上游核心文件触及清单为空，或仅包含独立 Beat 注册。
-- 新 migration 只创建和删除 Graph Job 表及索引。
-- Graph 模块可独立禁用、测试和删除。
-- 未执行 Graph migration 或未启动 Graph Worker 时，普通 API、普通 Worker 和基础检索仍可用。
-- 上游升级前执行 `git diff --name-only <upstream-base>...HEAD`，确认本地补丁主要集中在 Graph 模块、migration 和独立注册点。
-- 上游升级后执行 Graph Job migration 语法检查、Graph 模块单元测试、普通索引回归和部署健康检查。
+- 同一关系由两个 Segment 支撑时能返回两个证据 Segment。
+- 文档删除一条关系后重新索引，旧关系不再命中。
+- 不同 tenant 或 Dataset 的同名实体不会串图。
+- 相同 Job 重复执行不产生重复节点、事实或证据。
 
-## 后续可选实时 Hook
+### P0-3 补齐文档与 Segment 生命周期同步
 
-只有分钟级最终一致性不能满足业务要求时才实现。Hook 只调用 `GraphIndexCoordinator.enqueue(...)`，不执行抽取或 Neo4j 写入；任何 Hook 漏触发都必须由 Reconciler 补偿。
+实施结果：
 
-## 验证策略
+- Reconciler 在数据库事务提交后执行 Dataset 图对账，删除已删除、归档、禁用或索引失效的 Document/Segment 图对象，并清理孤儿 Fact/Entity。
+- `source_version` 已包含排序后的有效 Segment ID、正文 SHA-256 和更新时间，Segment 内容或集合变化都会创建新 Job。
+- 活动文档的旧图保留到新版本全部写入成功，避免重建失败导致知识库暂时无图可用。
+- Dataset 关闭 GraphRAG 时停止构图和图检索并保留数据；显式清空 API/页面入口仍归 T6 运维能力。
 
-- 单元测试 seam：领域对象的 Pydantic 校验、模型默认值及全局配置。
-- 迁移 seam：对迁移文件执行 Python 语法编译，并人工核对 upgrade/downgrade 对称性；本机不连接共享数据库。
-- 回归 seam：Phase 1 不修改索引与检索调用链，现有行为由默认关闭开关保持不变。
-- 2026-07-17 验证：前端定向测试 229 passed（含创建校验中断、创建请求携带配置、ModelSelector 和配置校验），前端 `pnpm type-check` 通过；后端 GraphRAG 领域/模型测试 9 passed，Ruff 与 Python compileall 通过。控制器测试受 Windows `python-magic` 加载时 access violation 阻塞，需在稳定 Linux/容器测试环境补跑。
+必须完成：
+
+- 增加 `index`、`delete_document`、`delete_segment`、`rebuild` 等 Job 类型，或建立等价的生命周期命令模型。
+- Reconciler 同时对账当前有效 Segment 和 Neo4j 证据，清理孤儿与过期数据。
+- `source_version` 改为稳定的 Segment 内容哈希，或用自动化测试证明所有内容修改入口都会更新当前版本事实。
+- 第一期开关关闭策略统一为：停止构图和图检索，保留图数据；另提供显式清空动作。
+
+验收：
+
+- 文档更新后只检索到新内容对应的图证据。
+- 文档或 Segment 删除、归档、禁用后不再返回对应结果。
+- Reconciler 能发现并清理 Neo4j 孤儿数据。
+
+本轮验证：disposable Neo4j 已真实验证 Segment 删除、Document 删除、孤儿清理和版本替换；显式清空操作入口未实现。
+
+### P0-4 实现安全、可降级的 Graph Retrieval
+
+新增模块建议：
+
+```text
+api/core/rag/graph_retrieval/
+  query_analyzer.py
+  neo4j_reader.py
+  service.py
+  fusion.py
+```
+
+必须完成：
+
+1. Query Analyzer 从用户问题提取最多 5 个实体候选和可选关系类型，输出通过 `GraphQuery` 校验。
+2. Neo4j Reader 只使用固定一跳 Cypher 模板，不开放 Text-to-Cypher；所有值均参数化。
+3. 查询强制过滤 tenant、dataset 和当前成功 `graph_version`。
+4. 返回 `segment_id`、图距离、路径、命中实体和关系，并映射为 `GraphResult`。
+5. 返回前回查 Dify 数据库，只保留当前启用、未删除、属于当前 Dataset 的 Segment。
+6. 严格执行 `graph_top_k` 和 `graph_timeout_ms`。
+7. Neo4j、查询分析模型或解析异常时，按 `GRAPH_RAG_FAIL_OPEN=true` 返回空图候选并继续基础检索。
+
+验收：
+
+- 已知实体问题能稳定命中预期 Segment。
+- 不同 tenant/Dataset 无法通过同名实体读取对方结果。
+- Neo4j 超时、断连和空结果不会中断普通检索。
+- 查询日志包含 Dataset、耗时、候选数和降级原因，不记录凭据。
+
+实施结果：Query Analyzer、固定参数化一跳 Reader、当前成功版本过滤、Dify Segment 回查、`graph_top_k`、客户端查询超时和 fail-open 均已进入实际调用链。真实模型不可用时会回退到本地关键词；本轮 disposable Neo4j 已验证该回退仍能命中图候选。真实配置模型调用仍待稳定 Linux 环境验证。
+
+### P0-5 接入 Dataset Retrieval 和既有 Reranker
+
+必须完成：
+
+- Dataset 配置为 `vector` 时保持上游现有行为，不调用 Neo4j。
+- 配置为 `hybrid` 且全局/Dataset 开关同时开启时，并行执行基础检索和 Graph Retrieval。
+- 将向量、关键词、图结果统一映射为 `KnowledgeCandidate`。
+- 使用 RRF 或等价排名融合；`graph_weight` 必须具有明确、可测试的计算语义。
+- 融合后继续使用 Dify 既有 Reranker，不修改 Workflow Knowledge Retrieval 对外协议。
+- Graph Retrieval 超时只丢弃图候选，不阻断基础候选返回。
+
+最小上游 Hook：
+
+```text
+api/core/rag/retrieval/dataset_retrieval.py
+```
+
+该 Hook 只调用新增 Graph Retrieval/Fusion 服务，图查询与融合细节不得散落到 Workflow 节点。
+
+验收：
+
+- 覆盖仅向量命中、仅图命中、两者同时命中和重复 Segment 四类测试。
+- 同一 Segment 被多路召回时只返回一份，并保留来源和排名元数据。
+- GraphRAG 全局关闭或 Dataset 关闭时，结果与上游基础检索一致。
+
+实施结果：Workflow Knowledge Retrieval、Agent 单库/多库 Dataset Tool 和知识库命中测试均已接入公开 `DatasetRetrieval.augment_with_graph` 扩展 seam；仅图命中可直接形成问答上下文，图候选与基础候选通过加权 RRF 去重融合，并在启用时继续进入既有 `DataPostProcessor`/Reranker。
+
+兼容性决策：运行时统一候选继续使用上游 `Document`，而不是强制转换为 `KnowledgeCandidate`。`Document.metadata.doc_id` 是现有向量节点及 parent-child 检索的真实身份键，强制以 Segment DTO 中转会丢失上游格式化与父子块语义。`KnowledgeCandidate` 暂保留为未来跨检索后端 DTO。
+
+性能余项：基础检索与 Graph Retrieval 当前顺序执行，功能和 fail-open 已完成；并行执行保留为后续性能优化，不阻塞知识库问答使用。
+
+### P0-6 完成真实端到端验收
+
+必须在稳定 Linux/容器环境完成：
+
+1. 执行全部 Graph migration，确认 Alembic 只有一个 head。
+2. 启动 API、Beat、可消费 `graph_index` 的 Worker 和 Neo4j。
+3. 创建测试 Dataset，启用 GraphRAG 并选择可用 LLM。
+4. 上传包含明确产品、模块、功能和错误关系的测试文档。
+5. 验证 Job 从 `pending -> running -> succeeded`。
+6. 只读查询 Neo4j，核对节点、关系、Segment 证据和版本字段。
+7. 调用知识库检索 API，证明至少一个候选来自图召回。
+8. 更新文档，证明旧图被替换。
+9. 删除文档，证明图数据被清理。
+10. 停止 Neo4j，证明基础向量检索仍可用并记录降级原因。
+
+没有以上业务证据，不得将 GraphRAG 标记为“可用”。
+
+## P1：生产可维护性
+
+P0 完成后继续：
+
+- 增加 Dataset Graph 状态 API：等待、运行、成功、失败数量，最后成功时间、当前版本和最近错误。
+- 增加按 Dataset/Document 的重试、取消、重建和清理入口。
+- 将 `graph_index` 放到独立 Worker 进程，真正隔离普通 Dataset Worker；应用 `GRAPH_INDEX_WORKER_CONCURRENCY`。
+- 增加任务耗时、模型调用、三元组数量、Neo4j 写入、查询命中和降级指标。
+- 增加 Neo4j 健康检查、超时、连接池上限和熔断策略。
+- 增加失败 Job 保留周期、错误脱敏和审计清理策略。
+- 在 Dataset 页面显示图索引状态和手工重建入口。
+- 完成 upstream 差异审计和升级检查清单。
+
+## 执行顺序与当前 Frontier
+
+| Ticket | 内容 | 依赖 | 当前状态 |
+| --- | --- | --- | --- |
+| T0 | 更新 ADR 与状态源，确认第一期采用直接 ModelManager + Neo4j Adapter | 无 | 已完成 |
+| T1 | 修复提交后派发、重新派发、原子领取、重试上限和事务拆分 | T0 | 已实现，待 Linux/Celery 集成验证 |
+| T2 | 修正多 Segment 证据、版本替换、约束索引和 Phase 3 测试 | T1 | 已完成 disposable Neo4j 写入/读取验证 |
+| T3 | 实现文档/Segment 更新删除同步与对账清理 | T2 | 核心生命周期已完成；显式清空入口归 T6 |
+| T4 | 实现 Graph Retrieval 和安全 Neo4j Reader | T2 | 已完成并通过 disposable Neo4j 查询验证 |
+| T5 | 接入 Dataset Retrieval、融合和 fail-open | T4 | 已完成；问答、Agent Tool、命中测试均已接入 |
+| T6 | 状态 API、独立 Worker、指标和运维入口 | T1 | 当前可并行 Frontier |
+| T7 | Linux/容器真实 Neo4j E2E、故障降级和删除验收 | T3、T5 | 当前生产验收 Frontier；已完成 disposable 子集 |
+| T8 | upstream 升级演练与发布检查 | T7 | 阻塞 |
+
+## 后续可选能力
+
+以下能力不阻塞第一期使用：
+
+- 普通索引完成后的实时 Hook；Reconciler 仍作为正确性兜底。
+- 使用 LlamaIndex/plugin_daemon Adapter 替换当前直接 Adapter。
+- 两跳及以上路径查询。
+- Text-to-Cypher。
+- 图社区摘要、PageRank、中心性和社区发现。
+- 图谱可视化编辑器。
+- 使用 Neo4j 替代现有向量库存储。
+
+## 当前验证记录
+
+- 本地 `docker/.env` 中 `GRAPH_RAG_ENABLED=true`、`ENABLE_GRAPH_RECONCILE_TASK=true`，Neo4j 四项连接配置均已设置。该证据只能证明配置存在，不能证明 Neo4j 可连接或业务链路成功。
+- 2026-07-19 完成 T1 单元级实现：Reconciler 事务提交后派发；可重新派发当前启用 Dataset、当前 `graph_version` 的到期 `pending` Job；Worker 使用条件更新原子领取，并将领取、外部 I/O、结果持久化拆成独立阶段。
+- 重试已执行 `available_at`、指数退避和 `GRAPH_INDEX_MAX_RETRIES`；并发唯一键冲突使用 savepoint，避免回滚 Reconciler 外层事务。
+- 2026-07-19 完成 T2 单元级实现：图模型调整为 `GraphEntity`、`GraphFact`、`GraphSegment`，事实和 Segment 证据分离；写入显式携带 tenant、Dataset、Document、`graph_version`、`source_version`。
+- 同一事实可由多个 Segment 建立独立 `EVIDENCE_FOR`；相同 Segment 重试时先替换当前版本证据，再清理孤儿事实和实体；全部 Segment 成功后才删除文档旧版本。
+- `strict` 和 `max_triplets_per_chunk` 已进入 Prompt、过滤、去重和截断链路；Neo4j 初始化增加 3 个复合唯一约束和 3 个查询索引。
+- T3/T4/T5 定向组合回归覆盖 Graph Indexing、生命周期、Graph Retrieval、完整 Dataset Retrieval、Agent 单库/多库 Tool 和 Hit Testing，结果为 `290 passed`；新增本地关键词回退测试单独为 `4 passed`。
+- disposable Neo4j 5.26 容器真实验证输出 `DISPOSABLE_NEO4J_GRAPH_VERIFICATION_PASSED`：约束/索引创建、多 Segment 证据、幂等、Reader 查询、版本替换、Segment 删除和 Document 删除均通过。
+- disposable Neo4j + 内存 Dify DB 真实组合验证输出 `DISPOSABLE_NEO4J_QA_RETRIEVAL_VERIFICATION_PASSED`：模型调用失败后使用本地关键词，图候选经当前版本校验、Segment 回查和 Dataset Retrieval 融合，最终形成可供问答使用的 `Document`。
+- GraphRAG 主调用链已覆盖 Workflow Knowledge Retrieval、Agent Dataset Tool、Multi Dataset Tool 和知识库 Hit Testing；`vector` 模式或开关关闭时保持基础检索行为。
+- fail-open、超时和断连路径已由单元测试覆盖；尝试对不可达 Neo4j 做物理验证时 DevSpace 返回 502，当前没有真实断连集成通过证据。
+- mypy 定向检查此前多次被 DevSpace 502 阻塞，当前没有类型检查通过证据。
+- 扩大到 Dataset 控制器测试时，Windows `python-magic` 在模块导入阶段触发 access violation；该项仍需在稳定 Linux/容器环境补跑。
+- 基础检索与图检索尚未并行；真实 LLM Query Analyzer、API/Beat/Worker 完整 Linux 链路和生产故障降级仍属于 T7。
+- 当前工作区存在用户先前未提交修改和临时文件；后续实现必须精确审计 diff，不得混入无关变更。
+
+## 完成标准
+
+只有同时满足以下条件，才可以宣布第一期 GraphRAG 可用：
+
+- [ ] Job 不丢失、可重试、可恢复，且不会被多个 Worker 重复并发执行。
+- [x] 图写入保留多 Segment 证据，支持版本替换和幂等重建（单元测试 + disposable Neo4j）。
+- [x] 文档/Segment 更新、禁用、归档和删除能同步清理图数据（核心对账已实现并完成 disposable Neo4j 验证）。
+- [x] Graph Retrieval 能安全返回当前 tenant、Dataset 的有效 Segment（单元测试 + disposable Neo4j/内存 DB）。
+- [x] 图候选进入统一检索并经过既有 Reranker（Workflow、Agent Tool、Hit Testing 已接入）。
+- [x] Neo4j 或图模型失败时自动降级到基础检索（单元测试；真实断连集成仍待 T7）。
+- [ ] 稳定 Linux/容器环境完成新增、更新、删除、检索和故障 E2E。
+- [ ] GraphRAG 关闭时行为与上游 Dify 基础检索一致。
+- [ ] 状态源、测试与代码不存在互相冲突的阶段描述。

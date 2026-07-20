@@ -121,10 +121,9 @@ class HitTestingService:
             retrieval_model or dataset.retrieval_model or default_retrieval_model,
         )
         document_ids_filter = None
+        dataset_retrieval = DatasetRetrieval()
         metadata_filtering_conditions_raw = resolved_retrieval_model.get("metadata_filtering_conditions", {})
         if metadata_filtering_conditions_raw and query:
-            dataset_retrieval = DatasetRetrieval()
-
             from core.rag.entities import MetadataFilteringCondition
 
             metadata_filtering_conditions = MetadataFilteringCondition.model_validate(metadata_filtering_conditions_raw)
@@ -144,6 +143,16 @@ class HitTestingService:
                 document_ids_filter = metadata_filter_document_ids.get(dataset.id, [])
             if metadata_condition and not document_ids_filter:
                 return cls.compact_retrieve_response(query, [], session=session)
+        top_k = resolved_retrieval_model.get("top_k", 4)
+        score_threshold = (
+            resolved_retrieval_model.get("score_threshold", 0.0)
+            if resolved_retrieval_model.get("score_threshold_enabled", False)
+            else 0.0
+        )
+        reranking_enable = bool(resolved_retrieval_model.get("reranking_enable", False))
+        reranking_model = resolved_retrieval_model.get("reranking_model", None) if reranking_enable else None
+        reranking_mode = resolved_retrieval_model.get("reranking_mode") or "reranking_model"
+        weights = resolved_retrieval_model.get("weights", None)
         all_documents = RetrievalService.retrieve(
             retrieval_method=RetrievalMethod(
                 resolved_retrieval_model.get("search_method", RetrievalMethod.SEMANTIC_SEARCH)
@@ -151,15 +160,25 @@ class HitTestingService:
             dataset_id=dataset.id,
             query=query,
             attachment_ids=attachment_ids,
-            top_k=resolved_retrieval_model.get("top_k", 4),
-            score_threshold=resolved_retrieval_model.get("score_threshold", 0.0)
-            if resolved_retrieval_model["score_threshold_enabled"]
-            else 0.0,
-            reranking_model=resolved_retrieval_model.get("reranking_model", None)
-            if resolved_retrieval_model["reranking_enable"]
-            else None,
-            reranking_mode=resolved_retrieval_model.get("reranking_mode") or "reranking_model",
-            weights=resolved_retrieval_model.get("weights", None),
+            top_k=top_k,
+            score_threshold=score_threshold,
+            reranking_model=reranking_model,
+            reranking_mode=reranking_mode,
+            weights=weights,
+            document_ids_filter=document_ids_filter,
+        )
+        all_documents = dataset_retrieval.augment_with_graph(
+            session=session,
+            tenant_id=dataset.tenant_id,
+            dataset_id=dataset.id,
+            query=query,
+            base_documents=all_documents,
+            top_k=top_k,
+            score_threshold=score_threshold,
+            reranking_enable=reranking_enable,
+            reranking_mode=reranking_mode,
+            reranking_model=reranking_model,
+            weights=weights,
             document_ids_filter=document_ids_filter,
         )
 

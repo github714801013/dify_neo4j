@@ -13,6 +13,7 @@ from core.rag.graph_indexing.entities import (
 )
 from core.rag.graph_indexing.versioning import (
     DocumentSourceFacts,
+    build_segment_source_facts,
     build_source_facts,
     compute_source_version,
 )
@@ -75,6 +76,26 @@ class TestComputeSourceVersion:
 
     def test_version_length_is_64(self):
         assert len(compute_source_version(self._facts())) == 64
+
+    def test_segment_order_does_not_change_version(self):
+        first = build_segment_source_facts("segment-1", content="alpha", updated_at=None)
+        second = build_segment_source_facts("segment-2", content="beta", updated_at=None)
+
+        assert compute_source_version(self._facts(), [first, second]) == compute_source_version(
+            self._facts(), [second, first]
+        )
+
+    def test_segment_content_change_produces_new_version(self):
+        original = build_segment_source_facts("segment-1", content="alpha", updated_at=None)
+        changed = build_segment_source_facts("segment-1", content="alpha changed", updated_at=None)
+
+        assert compute_source_version(self._facts(), [original]) != compute_source_version(self._facts(), [changed])
+
+    def test_active_segment_set_change_produces_new_version(self):
+        first = build_segment_source_facts("segment-1", content="alpha", updated_at=None)
+        second = build_segment_source_facts("segment-2", content="beta", updated_at=None)
+
+        assert compute_source_version(self._facts(), [first, second]) != compute_source_version(self._facts(), [first])
 
 
 class TestStateMachine:
