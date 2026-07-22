@@ -202,8 +202,8 @@ class HitTestingService:
                 created_by=account.id,
             )
             session.add(dataset_query)
-        session.commit()
 
+        # Keep response construction inside the request transaction; @with_session commits after return.
         return cls.compact_retrieve_response(query, all_documents, session=session)
 
     @classmethod

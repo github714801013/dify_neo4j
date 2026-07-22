@@ -1731,12 +1731,13 @@ def test_handle_node_run_result_marks_document_error_for_published_invoke(
     assert "documents.dataset_id" in statement
     assert "datasets.tenant_id" in statement
     assert "datasets.pipeline_id" in statement
+    assert "pipelines.tenant_id" in statement
     assert "doc-1" in compiled.params.values()
     assert "t1" in compiled.params.values()
     assert "dataset-1" in compiled.params.values()
     assert "pipeline-1" in compiled.params.values()
     assert document.indexing_status == "error"
-    assert document.error == "boom"
+    assert document.error == "知识库 Pipeline 执行失败，请查看 Worker 日志"
 
 
 def test_run_datasource_node_preview_raises_for_unsupported_provider(

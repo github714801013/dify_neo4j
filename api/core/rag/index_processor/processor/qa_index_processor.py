@@ -90,6 +90,7 @@ class QAIndexProcessor(BaseIndexProcessor):
                     document_node.page_content = remove_leading_symbols(page_content)
                     split_documents.append(document_node)
             all_documents.extend(split_documents)
+        format_errors: list[Exception] = []
         if preview:
             self._format_qa_document(
                 current_app._get_current_object(),  # type: ignore
@@ -97,6 +98,7 @@ class QAIndexProcessor(BaseIndexProcessor):
                 all_documents[0],
                 all_qa_documents,
                 kwargs.get("doc_language", "English"),
+                format_errors,
             )
         else:
             for i in range(0, len(all_documents), 10):
@@ -111,12 +113,15 @@ class QAIndexProcessor(BaseIndexProcessor):
                             "document_node": doc,
                             "all_qa_documents": all_qa_documents,
                             "document_language": kwargs.get("doc_language", "English"),
+                            "format_errors": format_errors,
                         },
                     )
                     threads.append(document_format_thread)
                     document_format_thread.start()
                 for thread in threads:
                     thread.join()
+        if format_errors:
+            raise format_errors[0]
         return all_qa_documents
 
     def format_by_template(self, file: FileStorage, **kwargs) -> list[Document]:
@@ -237,7 +242,15 @@ class QAIndexProcessor(BaseIndexProcessor):
         # QA model doesn't generate summaries, return as-is
         return preview_texts
 
-    def _format_qa_document(self, flask_app: Flask, tenant_id: str, document_node, all_qa_documents, document_language):
+    def _format_qa_document(
+        self,
+        flask_app: Flask,
+        tenant_id: str,
+        document_node,
+        all_qa_documents,
+        document_language,
+        format_errors: list[Exception] | None = None,
+    ):
         format_documents = []
         if document_node.page_content is None or not document_node.page_content.strip():
             return
@@ -257,8 +270,10 @@ class QAIndexProcessor(BaseIndexProcessor):
                         qa_document.metadata["doc_hash"] = hash
                     qa_documents.append(qa_document)
                 format_documents.extend(qa_documents)
-            except Exception:
+            except Exception as error:
                 logger.exception("Failed to format qa document")
+                if format_errors is not None:
+                    format_errors.append(error)
 
             all_qa_documents.extend(format_documents)
 

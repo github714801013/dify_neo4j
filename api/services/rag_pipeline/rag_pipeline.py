@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 import contexts
 from configs import dify_config
+from core.app.apps.pipeline.pipeline_error import format_pipeline_document_error
 from core.app.apps.pipeline.pipeline_generator import PipelineGenerator
 from core.app.entities.app_invoke_entities import InvokeFrom
 from core.datasource.entities.datasource_entities import (
@@ -63,7 +64,7 @@ from models.dataset import (  # type: ignore
     PipelineCustomizedTemplate,
     PipelineRecommendedPlugin,
 )
-from models.enums import IndexingStatus, WorkflowRunTriggeredFrom
+from models.enums import WorkflowRunTriggeredFrom
 from models.model import EndUser
 from models.workflow import (
     Workflow,
@@ -79,6 +80,7 @@ from services.entities.knowledge_entities.rag_pipeline_entities import (
     PipelineTemplateInfoEntity,
 )
 from services.errors.app import IsDraftWorkflowError, WorkflowHashNotEqualError, WorkflowNotFoundError
+from services.rag_pipeline.document_status import mark_document_error
 from services.rag_pipeline.pipeline_template.pipeline_template_factory import PipelineTemplateRetrievalFactory
 from services.tools.builtin_tools_manage_service import BuiltinToolManageService
 from services.workflow_draft_variable_service import DraftVariableSaver, DraftVarLoader
@@ -1003,23 +1005,14 @@ class RagPipelineService:
                     dataset_id = get_system_segment(variable_pool, SystemVariableKey.DATASET_ID)
                     pipeline_id = get_system_segment(variable_pool, SystemVariableKey.APP_ID)
                     if document_id and dataset_id and pipeline_id:
-                        document = self._session.scalar(
-                            select(Document)
-                            .join(Dataset, Dataset.id == Document.dataset_id)
-                            .where(
-                                Document.id == document_id.value,
-                                Document.tenant_id == tenant_id,
-                                Document.dataset_id == dataset_id.value,
-                                Dataset.tenant_id == tenant_id,
-                                Dataset.pipeline_id == pipeline_id.value,
-                            )
-                            .limit(1)
+                        mark_document_error(
+                            self._session,
+                            tenant_id=tenant_id,
+                            dataset_id=dataset_id.value,
+                            pipeline_id=pipeline_id.value,
+                            document_id=document_id.value,
+                            error_message=format_pipeline_document_error(error or "Unknown pipeline error"),
                         )
-                        if document:
-                            document.indexing_status = IndexingStatus.ERROR
-                            document.error = error
-                            self._session.add(document)
-                            self._session.commit()
 
         return workflow_node_execution
 

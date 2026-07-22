@@ -147,6 +147,33 @@ class TestKnowledgeIndexNode:
         assert node.index_processor == mock_index_processor
         assert node.summary_index_service == mock_summary_index_service
 
+    @pytest.mark.parametrize(
+        "summary_index_setting",
+        [
+            {
+                "enable": True,
+                "model_name": "summary-model",
+                "model_provider_name": "provider",
+                "summary_prompt": None,
+            },
+            {"enable": True, "model_name": "summary-model", "model_provider_name": "provider"},
+        ],
+    )
+    def test_node_data_accepts_missing_summary_prompt(self, summary_index_setting: dict[str, object]):
+        """Empty summary prompts use the existing downstream default prompt."""
+        node_data = {
+            "title": "Knowledge Index",
+            "type": "knowledge-index",
+            "chunk_structure": "general_structure",
+            "index_chunk_variable_selector": ["start", "chunks"],
+            "summary_index_setting": summary_index_setting,
+        }
+
+        result = KnowledgeIndexNodeData.model_validate(node_data)
+
+        assert result.summary_index_setting is not None
+        assert result.summary_index_setting["enable"] is True
+
     def test_run_without_dataset_id(
         self,
         mock_graph_init_params,

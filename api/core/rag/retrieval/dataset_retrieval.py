@@ -618,8 +618,9 @@ class DatasetRetrieval:
     ) -> list[Document]:
         """把图候选融合到单 Dataset 基础结果，并复用既有 Reranker。
 
-        GraphRAG 关闭、无命中或降级时原样返回基础结果。只有图候选真实加入后
-        才重新执行 DataPostProcessor，避免改变纯基础检索的排序和分数。
+        GraphRAG 关闭或无命中时原样返回基础结果。只有图候选真实加入后
+        才重新执行 DataPostProcessor；Reranker 降级时跳过重排并返回已融合候选，避免
+        在基础召回为空时丢弃有效的图候选。
         """
         if not tenant_id or not query.strip():
             return base_documents
@@ -660,7 +661,7 @@ class DatasetRetrieval:
                     dataset_id,
                     exc_info=True,
                 )
-                return base_documents
+                return fused_documents
             raise
 
     def single_retrieve(

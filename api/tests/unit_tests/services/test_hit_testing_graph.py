@@ -53,3 +53,4 @@ def test_hit_testing_uses_graph_only_candidate_in_compact_response():
     assert result == expected
     dataset_retrieval.augment_with_graph.assert_called_once()
     compact.assert_called_once_with("GraphRAG", [graph_document], session=session)
+    session.commit.assert_not_called()

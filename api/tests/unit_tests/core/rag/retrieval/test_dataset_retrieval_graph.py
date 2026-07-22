@@ -98,7 +98,7 @@ def test_augment_fuses_graph_candidate_and_sends_it_to_existing_reranker():
     assert processor.invoke.call_args.kwargs["top_n"] == 4
 
 
-def test_augment_reranker_error_fails_open_to_original_base_results():
+def test_augment_reranker_error_fails_open_to_fused_candidates():
     retrieval = DatasetRetrieval()
     base = [_document("vector-node")]
     graph = [_document("graph-node", source="graph")]
@@ -131,7 +131,43 @@ def test_augment_reranker_error_fails_open_to_original_base_results():
             document_ids_filter=None,
         )
 
-    assert result == base
+    assert [item.metadata["doc_id"] for item in result] == ["vector-node", "graph-node"]
+
+
+def test_augment_reranker_error_keeps_graph_candidate_when_base_is_empty():
+    retrieval = DatasetRetrieval()
+    graph = [_document("graph-node", source="graph")]
+    processor = MagicMock()
+    processor.invoke.side_effect = RuntimeError("reranker unavailable")
+
+    from core.rag.retrieval import dataset_retrieval as module
+
+    with (
+        patch.object(module.dify_config, "GRAPH_RAG_FAIL_OPEN", True),
+        patch.object(
+            module,
+            "retrieve_graph_documents",
+            return_value=GraphRetrievalBatch(documents=graph, graph_weight=0.5),
+        ),
+        patch.object(module, "DataPostProcessor", return_value=processor),
+    ):
+        result = retrieval.augment_with_graph(
+            session=MagicMock(),
+            tenant_id="tenant-1",
+            dataset_id="dataset-1",
+            query="GraphRAG",
+            base_documents=[],
+            top_k=4,
+            score_threshold=0,
+            reranking_enable=True,
+            reranking_mode="reranking_model",
+            reranking_model={"reranking_provider_name": "provider", "reranking_model_name": "model"},
+            weights=None,
+            document_ids_filter=None,
+        )
+
+    assert [item.metadata["doc_id"] for item in result] == ["graph-node"]
+    assert result[0].metadata["retrieval_sources"] == ["graph"]
 
 
 def test_augment_reranker_error_propagates_when_fail_open_disabled():

@@ -15,6 +15,7 @@ from core.tools.errors import ToolInvokeError
 from core.tools.tool_engine import ToolEngine
 from core.tools.tool_manager import ToolManager
 from core.tools.utils.message_transformer import ToolFileMessageTransformer
+from core.workflow.mineru_tool_error import MINERU_PARSE_FAILURE_MESSAGE, raise_if_mineru_parse_failed
 from core.workflow.node_runtime import DifyToolNodeRuntime
 from core.workflow.system_variables import build_system_variables
 from graphon.model_runtime.entities.llm_entities import LLMUsage
@@ -129,6 +130,88 @@ def test_invoke_maps_plugin_errors_to_graph_errors(runtime: DifyToolNodeRuntime)
                     provider_name="provider",
                 )
             )
+
+
+@pytest.mark.parametrize(
+    "failure_text",
+    [
+        'Failed to parse file. result: {"status":"failed","error":"Connection reset by peer"}',
+        "Failed to connect to server: [Errno 104] Connection reset by peer",
+    ],
+)
+def test_invoke_maps_mineru_parse_failures_to_graph_errors(
+    runtime: DifyToolNodeRuntime,
+    failure_text: str,
+) -> None:
+    failure_message = ToolInvokeMessage(
+        type=ToolInvokeMessage.MessageType.TEXT,
+        message=ToolInvokeMessage.TextMessage(text=failure_text),
+        meta=None,
+    )
+    mineru_tool = SimpleNamespace(
+        entity=SimpleNamespace(
+            identity=SimpleNamespace(
+                name="parse-file",
+                provider="langgenius/mineru/mineru",
+            )
+        )
+    )
+
+    with patch.object(ToolEngine, "generic_invoke", return_value=iter([failure_message])):
+        with pytest.raises(ToolRuntimeInvocationError, match=MINERU_PARSE_FAILURE_MESSAGE):
+            list(
+                runtime.invoke(
+                    tool_runtime=ToolRuntimeHandle(raw=mineru_tool),
+                    tool_parameters={},
+                    workflow_call_depth=0,
+                    provider_name="langgenius/mineru/mineru",
+                )
+            )
+
+
+def test_mineru_parse_failure_detector_ignores_success_payload() -> None:
+    raise_if_mineru_parse_failed(
+        provider_name="langgenius/mineru/mineru",
+        tool_name="parse-file",
+        message='Failed to parse file. result: {"status":"success"}',
+    )
+
+
+def test_mineru_parse_failure_detector_does_not_match_other_providers() -> None:
+    raise_if_mineru_parse_failed(
+        provider_name="other/provider",
+        tool_name="parse-file",
+        message="Failed to connect to server: connection reset",
+    )
+
+
+def test_invoke_does_not_treat_normal_mineru_text_as_failure(runtime: DifyToolNodeRuntime) -> None:
+    success_message = ToolInvokeMessage(
+        type=ToolInvokeMessage.MessageType.TEXT,
+        message=ToolInvokeMessage.TextMessage(text="parsed document content"),
+        meta=None,
+    )
+    mineru_tool = SimpleNamespace(
+        entity=SimpleNamespace(
+            identity=SimpleNamespace(
+                name="parse-file",
+                provider="langgenius/mineru/mineru",
+            )
+        )
+    )
+
+    with patch.object(ToolEngine, "generic_invoke", return_value=iter([success_message])):
+        messages = list(
+            runtime.invoke(
+                tool_runtime=ToolRuntimeHandle(raw=mineru_tool),
+                tool_parameters={},
+                workflow_call_depth=0,
+                provider_name="langgenius/mineru/mineru",
+            )
+        )
+
+    assert len(messages) == 1
+    assert messages[0].message.text == "parsed document content"
 
 
 def test_get_usage_normalizes_dict_payload(runtime: DifyToolNodeRuntime) -> None:

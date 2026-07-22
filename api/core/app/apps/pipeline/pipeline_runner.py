@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from core.app.apps.base_app_queue_manager import AppQueueManager
 from core.app.apps.pipeline.pipeline_config_manager import PipelineConfig
+from core.app.apps.pipeline.pipeline_error import format_pipeline_document_error
 from core.app.apps.workflow_app_runner import WorkflowBasedAppRunner
 from core.app.entities.app_invoke_entities import (
     InvokeFrom,
@@ -27,9 +28,10 @@ from graphon.graph_events import GraphEngineEvent, GraphRunFailedEvent
 from graphon.runtime import GraphRuntimeState, VariablePool
 from graphon.variable_loader import VariableLoader
 from graphon.variables.variables import RAGPipelineVariable, RAGPipelineVariableInput
-from models.dataset import Document, Pipeline
+from models.dataset import Pipeline
 from models.model import EndUser
 from models.workflow import Workflow
+from services.rag_pipeline.document_status import mark_document_error
 
 logger = logging.getLogger(__name__)
 
@@ -301,11 +303,12 @@ class PipelineRunner(WorkflowBasedAppRunner):
         """
         if isinstance(event, GraphRunFailedEvent):
             if document_id and dataset_id:
-                with create_session() as session, session.begin():
-                    document = session.scalar(
-                        select(Document).where(Document.id == document_id, Document.dataset_id == dataset_id).limit(1)
+                with create_session() as session:
+                    mark_document_error(
+                        session,
+                        tenant_id=self.application_generate_entity.app_config.tenant_id,
+                        dataset_id=dataset_id,
+                        pipeline_id=self.application_generate_entity.app_config.app_id,
+                        document_id=document_id,
+                        error_message=format_pipeline_document_error(event.error or "Unknown error"),
                     )
-                    if document:
-                        document.indexing_status = "error"
-                        document.error = event.error or "Unknown error"
-                        session.add(document)

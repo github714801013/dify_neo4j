@@ -105,10 +105,12 @@ class KnowledgeIndexNodeData(BaseNodeData):
     @field_validator("summary_index_setting", mode="before")
     @classmethod
     def normalize_summary_index_setting(cls, v: Any) -> Any:
-        """Treat dicts with enable=None (or missing enable) as None (#36233)."""
+        """Treat disabled summary settings and missing prompts as runtime defaults."""
         if v is None:
             return None
         if isinstance(v, dict):
             if v.get("enable") is None:
                 return None
+            if v.get("summary_prompt") is None:
+                v = {key: value for key, value in v.items() if key != "summary_prompt"}
         return v

@@ -3,13 +3,15 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, PropertyMock
 
 import pytest
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 import core.app.apps.pipeline.pipeline_generator as module
 from core.app.apps.exc import GenerateTaskStoppedError
 from core.app.entities.app_invoke_entities import InvokeFrom
 from core.datasource.entities.datasource_entities import DatasourceProviderType
-from models.enums import DataSourceType
+from core.workflow.nodes.knowledge_index.entities import KnowledgeIndexNodeData
+from models.enums import DataSourceType, IndexingStatus
 
 
 class FakeRagPipelineGenerateEntity(SimpleNamespace):
@@ -354,6 +356,142 @@ def test_generate_worker_handles_errors(generator, mocker: MockerFixture):
     )
 
     queue_manager.publish_error.assert_called_once()
+
+
+def test_generate_worker_marks_published_pipeline_document_as_error(generator, mocker: MockerFixture):
+    flask_app = MagicMock()
+    flask_app.app_context.return_value = contextlib.nullcontext()
+    mocker.patch.object(module, "preserve_flask_contexts", _dummy_preserve)
+    mocker.patch.object(module.db, "session", MagicMock(close=MagicMock()))
+    mocker.patch.object(type(module.db), "engine", new_callable=PropertyMock, return_value=MagicMock())
+
+    application_generate_entity = FakeRagPipelineGenerateEntity(
+        app_config=SimpleNamespace(tenant_id="tenant", app_id="pipe", workflow_id="wf"),
+        invoke_from=InvokeFrom.PUBLISHED_PIPELINE,
+        user_id="user",
+        document_id="doc",
+        dataset_id="dataset",
+    )
+
+    workflow_session = DummySession()
+    workflow_session.scalar.return_value = MagicMock()
+    document = SimpleNamespace(indexing_status=IndexingStatus.WAITING, error=None)
+    document_session = DummySession()
+    document_session.scalar.return_value = document
+    document_session.add = MagicMock()
+    document_session.commit = MagicMock()
+    mocker.patch.object(module, "Session", side_effect=[workflow_session, document_session])
+
+    runner_instance = MagicMock()
+    runner_instance.run.side_effect = ValueError("Pipeline generation failed")
+    mocker.patch.object(module, "PipelineRunner", return_value=runner_instance)
+
+    generator._generate_worker(
+        flask_app=flask_app,
+        application_generate_entity=application_generate_entity,
+        queue_manager=MagicMock(),
+        context=contextlib.nullcontext(),
+        variable_loader=MagicMock(),
+        workflow_execution_repository=MagicMock(),
+        workflow_node_execution_repository=MagicMock(),
+    )
+
+    assert document.indexing_status == IndexingStatus.ERROR
+    assert document.error == "知识库 Pipeline 执行失败，请查看 Worker 日志"
+    document_session.commit.assert_called_once()
+
+
+def test_generate_worker_simplifies_validation_error_for_published_pipeline(generator, mocker: MockerFixture):
+    flask_app = MagicMock()
+    flask_app.app_context.return_value = contextlib.nullcontext()
+    mocker.patch.object(module, "preserve_flask_contexts", _dummy_preserve)
+    mocker.patch.object(module.db, "session", MagicMock(close=MagicMock()))
+    mocker.patch.object(type(module.db), "engine", new_callable=PropertyMock, return_value=MagicMock())
+
+    application_generate_entity = FakeRagPipelineGenerateEntity(
+        app_config=SimpleNamespace(tenant_id="tenant", app_id="pipe", workflow_id="wf"),
+        invoke_from=InvokeFrom.PUBLISHED_PIPELINE,
+        user_id="user",
+        document_id="doc",
+        dataset_id="dataset",
+    )
+
+    workflow_session = DummySession()
+    workflow_session.scalar.return_value = MagicMock()
+    document = SimpleNamespace(indexing_status=IndexingStatus.WAITING, error=None)
+    document_session = DummySession()
+    document_session.scalar.return_value = document
+    document_session.add = MagicMock()
+    document_session.commit = MagicMock()
+    mocker.patch.object(module, "Session", side_effect=[workflow_session, document_session])
+
+    with pytest.raises(ValidationError) as validation_error:
+        KnowledgeIndexNodeData.model_validate(
+            {
+                "title": "Knowledge Index",
+                "type": "knowledge-index",
+                "chunk_structure": "general_structure",
+                "index_chunk_variable_selector": ["start", "chunks"],
+                "summary_index_setting": {"enable": True, "summary_prompt": 123},
+            }
+        )
+
+    runner_instance = MagicMock()
+    runner_instance.run.side_effect = validation_error.value
+    mocker.patch.object(module, "PipelineRunner", return_value=runner_instance)
+
+    generator._generate_worker(
+        flask_app=flask_app,
+        application_generate_entity=application_generate_entity,
+        queue_manager=MagicMock(),
+        context=contextlib.nullcontext(),
+        variable_loader=MagicMock(),
+        workflow_execution_repository=MagicMock(),
+        workflow_node_execution_repository=MagicMock(),
+    )
+
+    assert document.error == "知识库 Pipeline 配置校验失败：summary_index_setting.summary_prompt"
+
+
+def test_generate_worker_does_not_downgrade_completed_document(generator, mocker: MockerFixture):
+    flask_app = MagicMock()
+    flask_app.app_context.return_value = contextlib.nullcontext()
+    mocker.patch.object(module, "preserve_flask_contexts", _dummy_preserve)
+    mocker.patch.object(module.db, "session", MagicMock(close=MagicMock()))
+    mocker.patch.object(type(module.db), "engine", new_callable=PropertyMock, return_value=MagicMock())
+
+    application_generate_entity = FakeRagPipelineGenerateEntity(
+        app_config=SimpleNamespace(tenant_id="tenant", app_id="pipe", workflow_id="wf"),
+        invoke_from=InvokeFrom.PUBLISHED_PIPELINE,
+        user_id="user",
+        document_id="doc",
+        dataset_id="dataset",
+    )
+
+    workflow_session = DummySession()
+    workflow_session.scalar.return_value = MagicMock()
+    document_session = DummySession()
+    document_session.scalar.return_value = SimpleNamespace(indexing_status=IndexingStatus.COMPLETED, error=None)
+    document_session.add = MagicMock()
+    document_session.commit = MagicMock()
+    mocker.patch.object(module, "Session", side_effect=[workflow_session, document_session])
+
+    runner_instance = MagicMock()
+    runner_instance.run.side_effect = ValueError("Pipeline generation failed")
+    mocker.patch.object(module, "PipelineRunner", return_value=runner_instance)
+
+    generator._generate_worker(
+        flask_app=flask_app,
+        application_generate_entity=application_generate_entity,
+        queue_manager=MagicMock(),
+        context=contextlib.nullcontext(),
+        variable_loader=MagicMock(),
+        workflow_execution_repository=MagicMock(),
+        workflow_node_execution_repository=MagicMock(),
+    )
+
+    document_session.add.assert_not_called()
+    document_session.commit.assert_not_called()
 
 
 def test_generate_worker_sets_system_user_id_for_external_call(generator, mocker: MockerFixture):

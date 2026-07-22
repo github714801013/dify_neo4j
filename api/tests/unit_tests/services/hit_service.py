@@ -194,7 +194,7 @@ class TestHitTestingServiceRetrieve:
             assert len(result["records"]) == 2
             mock_retrieve.assert_called_once()
             mock_db_session.add.assert_called_once()
-            mock_db_session.commit.assert_called_once()
+            mock_db_session.commit.assert_not_called()
 
     def test_retrieve_success_with_custom_retrieval_model(self, mock_db_session):
         """

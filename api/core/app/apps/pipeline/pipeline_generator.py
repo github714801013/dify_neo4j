@@ -15,12 +15,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 import contexts
-from configs import dify_config
 from core.app.apps.base_app_generator import BaseAppGenerator
 from core.app.apps.base_app_queue_manager import AppQueueManager, PublishFrom
 from core.app.apps.draft_variable_saver import DraftVariableSaverFactory
 from core.app.apps.exc import GenerateTaskStoppedError
 from core.app.apps.pipeline.pipeline_config_manager import PipelineConfigManager
+from core.app.apps.pipeline.pipeline_error import format_pipeline_document_error
 from core.app.apps.pipeline.pipeline_queue_manager import PipelineQueueManager
 from core.app.apps.pipeline.pipeline_runner import PipelineRunner
 from core.app.apps.workflow.generate_response_converter import WorkflowAppGenerateResponseConverter
@@ -53,6 +53,7 @@ from models.dataset import Document, DocumentPipelineExecutionLog, Pipeline
 from models.enums import WorkflowRunTriggeredFrom
 from models.model import AppMode
 from services.datasource_provider_service import DatasourceProviderService
+from services.rag_pipeline.document_status import mark_document_error
 from services.rag_pipeline.rag_pipeline_task_proxy import RagPipelineTaskProxy
 from services.workflow_draft_variable_service import DraftVarLoader, WorkflowDraftVariableService
 
@@ -547,6 +548,40 @@ class PipelineGenerator(BaseAppGenerator):
             context=contextvars.copy_context(),
         )
 
+    def _mark_published_pipeline_document_error(
+        self, application_generate_entity: RagPipelineGenerateEntity, error: Exception
+    ) -> None:
+        """Persist a failure for a document owned by the current published Pipeline."""
+        if application_generate_entity.invoke_from != InvokeFrom.PUBLISHED_PIPELINE:
+            return
+
+        document_id = application_generate_entity.document_id
+        if not document_id:
+            return
+
+        tenant_id = application_generate_entity.app_config.tenant_id
+        dataset_id = application_generate_entity.dataset_id
+        pipeline_id = application_generate_entity.app_config.app_id
+
+        try:
+            with Session(db.engine, expire_on_commit=False) as session:
+                mark_document_error(
+                    session,
+                    tenant_id=tenant_id,
+                    dataset_id=dataset_id,
+                    pipeline_id=pipeline_id,
+                    document_id=document_id,
+                    error_message=format_pipeline_document_error(error),
+                )
+        except Exception:
+            logger.exception(
+                "Failed to mark pipeline document as error: tenant_id=%s dataset_id=%s pipeline_id=%s document_id=%s",
+                tenant_id,
+                dataset_id,
+                pipeline_id,
+                document_id,
+            )
+
     def _generate_worker(
         self,
         flask_app: Flask,
@@ -610,19 +645,47 @@ class PipelineGenerator(BaseAppGenerator):
                     runner.run()
             except GenerateTaskStoppedError:
                 pass
-            except InvokeAuthorizationError:
+            except InvokeAuthorizationError as e:
+                self._mark_published_pipeline_document_error(application_generate_entity, e)
+                logger.exception(
+                    "Authorization error when generating: tenant_id=%s app_id=%s workflow_id=%s document_id=%s",
+                    application_generate_entity.app_config.tenant_id,
+                    application_generate_entity.app_config.app_id,
+                    application_generate_entity.app_config.workflow_id,
+                    getattr(application_generate_entity, "document_id", None),
+                )
                 queue_manager.publish_error(
                     InvokeAuthorizationError("Incorrect API key provided"), PublishFrom.APPLICATION_MANAGER
                 )
             except ValidationError as e:
-                logger.exception("Validation Error when generating")
+                self._mark_published_pipeline_document_error(application_generate_entity, e)
+                logger.exception(
+                    "Validation Error when generating: tenant_id=%s app_id=%s workflow_id=%s document_id=%s",
+                    application_generate_entity.app_config.tenant_id,
+                    application_generate_entity.app_config.app_id,
+                    application_generate_entity.app_config.workflow_id,
+                    getattr(application_generate_entity, "document_id", None),
+                )
                 queue_manager.publish_error(e, PublishFrom.APPLICATION_MANAGER)
             except ValueError as e:
-                if dify_config.DEBUG:
-                    logger.exception("Error when generating")
+                self._mark_published_pipeline_document_error(application_generate_entity, e)
+                logger.exception(
+                    "Error when generating: tenant_id=%s app_id=%s workflow_id=%s document_id=%s",
+                    application_generate_entity.app_config.tenant_id,
+                    application_generate_entity.app_config.app_id,
+                    application_generate_entity.app_config.workflow_id,
+                    getattr(application_generate_entity, "document_id", None),
+                )
                 queue_manager.publish_error(e, PublishFrom.APPLICATION_MANAGER)
             except Exception as e:
-                logger.exception("Unknown Error when generating")
+                self._mark_published_pipeline_document_error(application_generate_entity, e)
+                logger.exception(
+                    "Unknown error when generating: tenant_id=%s app_id=%s workflow_id=%s document_id=%s",
+                    application_generate_entity.app_config.tenant_id,
+                    application_generate_entity.app_config.app_id,
+                    application_generate_entity.app_config.workflow_id,
+                    getattr(application_generate_entity, "document_id", None),
+                )
                 queue_manager.publish_error(e, PublishFrom.APPLICATION_MANAGER)
             finally:
                 db.session.close()

@@ -139,22 +139,22 @@ def test_init_rag_pipeline_graph_not_found(mocker, runner):
 
 
 def test_update_document_status_on_failure(mocker, runner):
-    document = MagicMock()
-
     session = MagicMock()
-    session.scalar.return_value = document
     _patch_create_session(mocker, session)
+    mark_document_error = mocker.patch.object(module, "mark_document_error")
 
     event = GraphRunFailedEvent(error="boom")
 
     runner._update_document_status(event, document_id="doc", dataset_id="ds")
 
-    assert document.indexing_status == "error"
-    assert document.error == "boom"
-    session.add.assert_called_once_with(document)
-    session.begin.assert_called_once()
-    session.begin.return_value.__enter__.assert_called_once()
-    session.begin.return_value.__exit__.assert_called_once()
+    mark_document_error.assert_called_once_with(
+        session,
+        tenant_id="tenant",
+        dataset_id="ds",
+        pipeline_id="pipe",
+        document_id="doc",
+        error_message="知识库 Pipeline 执行失败，请查看 Worker 日志",
+    )
 
 
 def test_run_pipeline_not_found(mocker: MockerFixture):

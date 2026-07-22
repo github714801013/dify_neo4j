@@ -86,7 +86,9 @@ class TestQAIndexProcessor:
         splitter = Mock()
         splitter.split_documents.return_value = [split_node]
 
-        def _append_document(flask_app, tenant_id, document_node, all_qa_documents, document_language):
+        def _append_document(
+            flask_app, tenant_id, document_node, all_qa_documents, document_language, format_errors=None
+        ):
             all_qa_documents.append(Document(page_content="Q1", metadata={"answer": "A1"}))
 
         with (
@@ -131,7 +133,9 @@ class TestQAIndexProcessor:
         splitter = Mock()
         splitter.split_documents.return_value = [split_node]
 
-        def _append_document(flask_app, tenant_id, document_node, all_qa_documents, document_language):
+        def _append_document(
+            flask_app, tenant_id, document_node, all_qa_documents, document_language, format_errors=None
+        ):
             all_qa_documents.append(Document(page_content=f"Q-{document_node.page_content}", metadata={"answer": "A"}))
 
         with (
@@ -161,6 +165,43 @@ class TestQAIndexProcessor:
 
         assert len(result) == 2
         assert mock_format.call_count == 2
+
+    def test_transform_propagates_qa_generation_error(
+        self, processor: QAIndexProcessor, process_rule: dict[str, Any], fake_flask_app
+    ) -> None:
+        document = Document(page_content="source text", metadata={"document_id": "doc-1"})
+        split_node = Document(page_content="question", metadata={})
+        splitter = Mock()
+        splitter.split_documents.return_value = [split_node]
+
+        with (
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.Rule.model_validate", return_value=self._rules()
+            ),
+            patch.object(processor, "_get_splitter", return_value=splitter),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.CleanProcessor.clean",
+                return_value="source text",
+            ),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.helper.generate_text_hash", return_value="hash"
+            ),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.remove_leading_symbols",
+                side_effect=lambda text: text,
+            ),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.LLMGenerator.generate_qa_document",
+                side_effect=RuntimeError("llm failure"),
+            ),
+            patch("core.rag.index_processor.processor.qa_index_processor.current_app") as mock_current_app,
+        ):
+            mock_current_app._get_current_object = Mock(return_value=fake_flask_app)
+
+            with pytest.raises(RuntimeError, match="llm failure"):
+                processor.transform(
+                    documents=[document], process_rule=process_rule, preview=False, tenant_id="tenant-1"
+                )
 
     def test_format_by_template_validates_file_type(self, processor: QAIndexProcessor) -> None:
         not_csv_file = Mock(spec=FileStorage)

@@ -37,6 +37,7 @@ from core.tools.tool_file_manager import ToolFileManager
 from core.tools.tool_manager import ToolManager
 from core.tools.utils.message_transformer import ToolFileMessageTransformer
 from core.workflow.file_reference import build_file_reference
+from core.workflow.mineru_tool_error import raise_if_mineru_parse_failed
 from core.workflow.nodes.human_input.entities import (
     FileInputConfig,
     FileListInputConfig,
@@ -580,7 +581,11 @@ class DifyToolNodeRuntime(ToolNodeRuntimeProtocol):
                     tenant_id=self._run_context.tenant_id,
                     conversation_id=runtime_binding.conversation_id,
                 )
-                yield from self._adapt_messages(transformed_messages, provider_name=provider_name)
+                yield from self._adapt_messages(
+                    transformed_messages,
+                    provider_name=provider_name,
+                    tool_name=self._tool_name(tool),
+                )
         except Exception as exc:
             raise self._map_invocation_exception(exc, provider_name=provider_name) from exc
 
@@ -635,6 +640,12 @@ class DifyToolNodeRuntime(ToolNodeRuntimeProtocol):
         return DifyToolNodeRuntime._binding_from_handle(tool_runtime).tool
 
     @staticmethod
+    def _tool_name(tool: Tool) -> str | None:
+        identity = getattr(getattr(tool, "entity", None), "identity", None)
+        name = getattr(identity, "name", None)
+        return name if isinstance(name, str) else None
+
+    @staticmethod
     def _binding_from_handle(tool_runtime: ToolRuntimeHandle) -> _WorkflowToolRuntimeBinding:
         if isinstance(tool_runtime.raw, _WorkflowToolRuntimeBinding):
             return tool_runtime.raw
@@ -663,9 +674,15 @@ class DifyToolNodeRuntime(ToolNodeRuntimeProtocol):
         messages: Generator[CoreToolInvokeMessage, None, None],
         *,
         provider_name: str,
+        tool_name: str | None,
     ) -> Generator[ToolRuntimeMessage, None, None]:
         try:
             for message in messages:
+                raise_if_mineru_parse_failed(
+                    provider_name=provider_name,
+                    tool_name=tool_name,
+                    message=getattr(message.message, "text", None),
+                )
                 yield self._convert_message(message)
         except Exception as exc:
             raise self._map_invocation_exception(exc, provider_name=provider_name) from exc
