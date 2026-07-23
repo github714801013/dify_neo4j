@@ -4,6 +4,7 @@ import logging
 import re
 import threading
 import uuid
+from operator import itemgetter
 from typing import Any, TypedDict, override
 
 import pandas as pd
@@ -287,15 +288,31 @@ class QAIndexProcessor(BaseIndexProcessor):
             all_qa_documents.extend(format_documents)
 
     def _format_split_text(self, text: str) -> list[dict[str, str]]:
-        regex = (
+        numbered_regex = (
             r"(?m)^(?:\*\*)?Q[ \t]*(\d+)[ \t]*[:：](?:\*\*)?[ \t]*(.*?)\r?\n"
             r"(?:\*\*)?A[ \t]*\1[ \t]*[:：](?:\*\*)?[ \t]*([\s\S]*?)"
             r"(?=^(?:\*\*)?Q[ \t]*\d+[ \t]*[:：]|\Z)"
         )
-        matches = re.findall(regex, text, re.UNICODE)
+        unnumbered_regex = (
+            r"(?m)^(?:\*\*)?Q[ \t]*[:：](?:\*\*)?[ \t]*(.*?)\r?\n"
+            r"(?:\*\*)?A[ \t]*[:：](?:\*\*)?[ \t]*([\s\S]*?)"
+            r"(?=^(?:\*\*)?Q[ \t]*[:：]|\Z)"
+        )
 
-        return [
-            {"question": question, "answer": re.sub(r"\n\s*", "\n", answer.strip())}
-            for _, question, answer in matches
-            if question and answer
-        ]
+        matches: list[tuple[int, int, dict[str, str]]] = []
+        for regex, question_group, answer_group in ((numbered_regex, 2, 3), (unnumbered_regex, 1, 2)):
+            for match in re.finditer(regex, text, re.UNICODE):
+                question = match.group(question_group).strip()
+                answer = re.sub(r"\n\s*", "\n", match.group(answer_group).strip())
+                if question and answer:
+                    matches.append((match.start(), match.end(), {"question": question, "answer": answer}))
+
+        qa_pairs: list[dict[str, str]] = []
+        last_end = 0
+        for start, end, qa_pair in sorted(matches, key=itemgetter(0)):
+            if start < last_end:
+                continue
+            qa_pairs.append(qa_pair)
+            last_end = end
+
+        return qa_pairs

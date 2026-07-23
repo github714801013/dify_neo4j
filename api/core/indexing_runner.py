@@ -389,6 +389,10 @@ class IndexingRunner:
     def _extract(
         self, index_processor: BaseIndexProcessor, dataset_document: DatasetDocument, process_rule: Mapping[str, Any]
     ) -> list[Document]:
+        """根据数据源元数据提取文档。
+
+        Pipeline 本地文件必须经 `real_file_id` 解析为上传文件；缺失时抛错，避免空索引被标为完成。
+        """
         data_source_info = dataset_document.data_source_info_dict
         text_docs = []
         match dataset_document.data_source_type:
@@ -405,6 +409,22 @@ class IndexingRunner:
                         document_model=dataset_document.doc_form,
                     )
                     text_docs = index_processor.extract(extract_setting, process_rule_mode=process_rule["mode"])
+            case DataSourceType.LOCAL_FILE:
+                if not data_source_info or "real_file_id" not in data_source_info:
+                    raise ValueError("no local file found")
+                stmt = select(UploadFile).where(
+                    UploadFile.id == data_source_info["real_file_id"],
+                    UploadFile.tenant_id == dataset_document.tenant_id,
+                )
+                file_detail = db.session.scalars(stmt).one_or_none()
+                if not file_detail:
+                    raise ValueError("local file not found")
+                extract_setting = ExtractSetting(
+                    datasource_type=DatasourceType.FILE,
+                    upload_file=file_detail,
+                    document_model=dataset_document.doc_form,
+                )
+                text_docs = index_processor.extract(extract_setting, process_rule_mode=process_rule["mode"])
             case DataSourceType.NOTION_IMPORT:
                 if (
                     not data_source_info

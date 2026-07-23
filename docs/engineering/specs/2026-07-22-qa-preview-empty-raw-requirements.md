@@ -2,14 +2,13 @@
 
 ## 阶段状态
 
-- `stage_status`: ready_to_commit
-- `current_skill`: git-delivery
-- `next_skill`: none
-- `resume_from`: 本功能包可在本地提交后等待代码评审；目标线上 `local_file` 文档提取问题不属于本次改动，需在定位线上镜像对应源码分支后另行处理。
-- `continuation_mode`: manual
-- `handoff_summary`: Ticket 01 与 Ticket 02 已完成：`process_rule.rules.qa_generation.max_tokens` 独立持久化，历史规则缺失时默认回退 `2000`；预览、创建、异步索引均使用同一值；页面仅在 Q&A 分段模式展示预算输入，切换模式时保留输入并支持重置；Q&A 解析兼容 Markdown 包裹和全角分隔符，空预览显示可访问说明。
-- `evidence`: 定向 pytest：156 passed（`test_llm_generator.py`、`test_qa_index_processor.py`、`test_dataset_service_document.py`）；定向 Vitest：6 个文件、105 个测试通过；`git diff --check` 通过。完整后端单元测试未形成有效结果：默认 pytest 在本机因 `pytest-cov` 导入 `coverage.data` 失败；禁用覆盖率后 xdist 报 0 items，串行 collect-only 触发 Windows access violation。
-- `required_action`: 用户已于 2026-07-23 授权精确暂存并本地提交；未授权 push、部署或重试目标线上文档。
+- `stage_status`: complete
+- `current_skill`: code-review
+- `next_skill`: git-delivery
+- `resume_from`: 若用户授权，精确暂存本轮 Q&A 解析器与回归测试文件后，再执行本地提交；未授权 push、部署或重试目标线上文档。
+- `continuation_mode`: authorization
+- `handoff_summary`: `process_rule.rules.qa_generation.max_tokens` 已有预览、创建与异步索引的透传测试，本轮补充模型返回无编号 `Q:/A:` 时的解析兼容；编号问答答案内出现无编号示例时保持答案完整，避免预览或正式索引内容被静默截断。
+- `evidence`: 定向 pytest：82 passed（`test_llm_generator.py`、`test_qa_index_processor.py`）；Ruff format/check 与本轮文件的 `git diff --check` 通过。测试以 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` 和 `-o addopts=''` 执行；仍有项目配置 `env` 未识别和 Python `cgi` 弃用警告。完整后端单元测试未形成有效结果：默认 pytest 在本机因 `pytest-cov` 导入 `coverage.data` 失败；禁用覆盖率后 xdist 报 0 items，串行 collect-only 触发 Windows access violation。
 - `confirmed_at`: 2026-07-23
 
 ## 2026-07-22 新需求：Q&A 生成预算页面配置
@@ -84,3 +83,17 @@
 3. 不完整、没有答案或没有问题的条目不会产生无效问答。
 4. `qa_preview` 为空时，页面显示明确的空预览说明而不是纯空白。
 5. 定向后端和前端测试通过；已部署至目标环境，待用户以原文件在页面完成真实业务验收。
+
+## 2026-07-23 补充：无编号 Q&A 输出兼容
+
+### 兼容性决策
+
+- 为避免生成模型未遵循提示词中的编号格式时直接产生空预览，解析器同时支持带编号的 `Q1:/A1:` 与无编号的 `Q:/A:`；两种格式均支持 Markdown 包裹和半角或全角冒号。
+- 带编号问答仍要求问答编号一致；无编号格式仅匹配成对的 `Q:/A:` 行首标签。
+- 编号问答的答案中出现无编号 `Q:/A:` 示例时，示例必须保留在原答案内，不能被识别成新的问答并截断内容。
+- 本轮不扩展到 `Question:/Answer:`、列表标记或混合编号格式；这些格式需要新的运行时样本和独立契约确认。
+
+### 证据与边界
+
+- 现有回归测试已断言预览与异步索引均把 `process_rule.rules.qa_generation.max_tokens=1536` 传入 Q&A 生成器，生成器也以该值调用模型。
+- 本轮没有连接目标环境或读取用户文档、模型密钥、Cookie 或完整模型输出；因此部署后仍需在已认证页面确认响应的 `qa_preview` 非空，且设置的最大 Tokens 与请求值一致。

@@ -499,6 +499,38 @@ class TestQAIndexProcessor:
 
         assert parsed == [{"question": "问题一", "answer": "答案一"}]
 
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            (
+                "Q: First?\nA: One.\nQ: Second?\nA: Two.\n",
+                [
+                    {"question": "First?", "answer": "One."},
+                    {"question": "Second?", "answer": "Two."},
+                ],
+            ),
+            ("**Q：** 问题一\n**A：** 答案一\n", [{"question": "问题一", "answer": "答案一"}]),
+        ],
+    )
+    def test_format_split_text_extracts_unnumbered_question_answer_pairs(
+        self, processor: QAIndexProcessor, text: str, expected: list[dict[str, str]]
+    ) -> None:
+        assert processor._format_split_text(text) == expected
+
+    def test_format_split_text_preserves_unnumbered_question_labels_in_numbered_answer_text(
+        self, processor: QAIndexProcessor
+    ) -> None:
+        parsed = processor._format_split_text(
+            "Q1: 如何定义问答格式？\nA1: 可以在答案中引用以下示例：\nQ: 示例问题\nA: 示例答案\n"
+        )
+
+        assert parsed == [
+            {
+                "question": "如何定义问答格式？",
+                "answer": "可以在答案中引用以下示例：\nQ: 示例问题\nA: 示例答案",
+            }
+        ]
+
     def test_format_split_text_skips_incomplete_or_mismatched_question_answer_pairs(
         self, processor: QAIndexProcessor
     ) -> None:

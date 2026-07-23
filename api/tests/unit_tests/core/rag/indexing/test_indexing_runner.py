@@ -343,6 +343,70 @@ class TestIndexingRunnerExtract:
         # Verify the processor was called exactly once (not multiple times)
         mock_processor.extract.assert_called_once()
 
+    def test_extract_local_file_success(self, mock_dependencies, sample_dataset_document, sample_process_rule):
+        """Test successful extraction from a Pipeline local file."""
+        runner = IndexingRunner()
+        sample_dataset_document.data_source_type = "local_file"
+        sample_dataset_document.data_source_info_dict = {"real_file_id": str(uuid.uuid4())}
+        mock_processor = MagicMock()
+        file_detail = Mock()
+        extracted_docs = [Document(page_content="Pipeline file content", metadata={"source": "pipeline.pdf"})]
+        mock_processor.extract.return_value = extracted_docs
+        mock_dependencies["db"].session.scalars.return_value.one_or_none.return_value = file_detail
+
+        with (
+            patch.object(runner, "_update_document_index_status"),
+            patch("core.indexing_runner.ExtractSetting") as mock_extract_setting,
+        ):
+            result = runner._extract(mock_processor, sample_dataset_document, sample_process_rule)
+
+        assert result == extracted_docs
+        assert result[0].metadata["document_id"] == sample_dataset_document.id
+        assert result[0].metadata["dataset_id"] == sample_dataset_document.dataset_id
+        mock_processor.extract.assert_called_once_with(
+            mock_extract_setting.return_value,
+            process_rule_mode=sample_process_rule["mode"],
+        )
+
+    def test_extract_local_file_without_real_file_id(
+        self, mock_dependencies, sample_dataset_document, sample_process_rule
+    ):
+        """Test extraction fails instead of silently completing without a local file ID."""
+        runner = IndexingRunner()
+        sample_dataset_document.data_source_type = "local_file"
+        sample_dataset_document.data_source_info_dict = {}
+
+        with pytest.raises(ValueError, match="no local file found"):
+            runner._extract(MagicMock(), sample_dataset_document, sample_process_rule)
+
+    def test_extract_local_file_scopes_upload_file_to_document_tenant(
+        self, mock_dependencies, sample_dataset_document, sample_process_rule
+    ):
+        """本地文件查询必须限制为当前文档租户。"""
+        runner = IndexingRunner()
+        sample_dataset_document.data_source_type = "local_file"
+        sample_dataset_document.data_source_info_dict = {"real_file_id": str(uuid.uuid4())}
+        mock_dependencies["db"].session.scalars.return_value.one_or_none.return_value = None
+
+        with pytest.raises(ValueError, match="local file not found"):
+            runner._extract(MagicMock(), sample_dataset_document, sample_process_rule)
+
+        statement = mock_dependencies["db"].session.scalars.call_args.args[0]
+        assert "upload_files.tenant_id" in str(statement)
+        assert sample_dataset_document.tenant_id in statement.compile().params.values()
+
+    def test_extract_local_file_when_upload_file_is_missing(
+        self, mock_dependencies, sample_dataset_document, sample_process_rule
+    ):
+        """Test extraction fails instead of returning no segments when the local file was deleted."""
+        runner = IndexingRunner()
+        sample_dataset_document.data_source_type = "local_file"
+        sample_dataset_document.data_source_info_dict = {"real_file_id": str(uuid.uuid4())}
+        mock_dependencies["db"].session.scalars.return_value.one_or_none.return_value = None
+
+        with pytest.raises(ValueError, match="local file not found"):
+            runner._extract(MagicMock(), sample_dataset_document, sample_process_rule)
+
     def test_extract_notion_import_success(self, mock_dependencies, sample_dataset_document, sample_process_rule):
         """Test successful extraction from Notion import."""
         # Arrange
