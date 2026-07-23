@@ -110,6 +110,7 @@ class TestQAIndexProcessor:
             document_language,
             format_errors=None,
             max_tokens=2000,
+            is_preview=False,
         ):
             all_qa_documents.append(Document(page_content="Q1", metadata={"answer": "A1"}))
 
@@ -143,6 +144,7 @@ class TestQAIndexProcessor:
         assert len(result) == 1
         assert result[0].metadata["answer"] == "A1"
         mock_format.assert_called_once()
+        assert mock_format.call_args.kwargs["is_preview"] is True
 
     def test_transform_uses_custom_qa_generation_budget_for_preview(
         self, processor: QAIndexProcessor, fake_flask_app
@@ -208,6 +210,7 @@ class TestQAIndexProcessor:
             document_language,
             format_errors=None,
             max_tokens=2000,
+            is_preview=False,
         ):
             all_qa_documents.append(Document(page_content=f"Q-{document_node.page_content}", metadata={"answer": "A"}))
 
@@ -240,6 +243,7 @@ class TestQAIndexProcessor:
         assert len(result) == 2
         assert mock_format.call_count == 2
         assert [call.kwargs["max_tokens"] for call in mock_format.call_args_list] == [1536, 1536]
+        assert [call.kwargs["is_preview"] for call in mock_format.call_args_list] == [False, False]
 
     def test_transform_propagates_qa_generation_error(
         self, processor: QAIndexProcessor, process_rule: dict[str, Any], fake_flask_app

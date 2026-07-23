@@ -340,6 +340,19 @@ class IndexingRunner:
                 preview=True,
             )
             total_segments += len(documents)
+            if doc_form == "qa_model":
+                qa_generation = tmp_processing_rule.get("rules", {}).get("qa_generation", {})
+                qa_generation_max_tokens = (
+                    qa_generation.get("max_tokens") if isinstance(qa_generation, Mapping) else None
+                )
+                logger.info(
+                    "[DEBUG-qa-preview-20260723] Q&A preview estimate completed "
+                    "(tenant_id=%s, source_document_count=%s, generated_pair_count=%s, max_tokens=%s)",
+                    tenant_id,
+                    len(text_docs),
+                    len(documents),
+                    qa_generation_max_tokens,
+                )
             for document in documents:
                 if len(preview_texts) < 10:
                     if doc_form and doc_form == "qa_model":

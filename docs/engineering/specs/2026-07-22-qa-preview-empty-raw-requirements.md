@@ -2,13 +2,13 @@
 
 ## 阶段状态
 
-- `stage_status`: complete
-- `current_skill`: code-review
-- `next_skill`: git-delivery
-- `resume_from`: 若用户授权，精确暂存本轮 Q&A 解析器与回归测试文件后，再执行本地提交；未授权 push、部署或重试目标线上文档。
-- `continuation_mode`: authorization
-- `handoff_summary`: `process_rule.rules.qa_generation.max_tokens` 已有预览、创建与异步索引的透传测试，本轮补充模型返回无编号 `Q:/A:` 时的解析兼容；编号问答答案内出现无编号示例时保持答案完整，避免预览或正式索引内容被静默截断。
-- `evidence`: 定向 pytest：82 passed（`test_llm_generator.py`、`test_qa_index_processor.py`）；Ruff format/check 与本轮文件的 `git diff --check` 通过。测试以 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` 和 `-o addopts=''` 执行；仍有项目配置 `env` 未识别和 Python `cgi` 弃用警告。完整后端单元测试未形成有效结果：默认 pytest 在本机因 `pytest-cov` 导入 `coverage.data` 失败；禁用覆盖率后 xdist 报 0 items，串行 collect-only 触发 Windows access violation。
+- `stage_status`: in_progress
+- `current_skill`: diagnosing-bugs
+- `next_skill`: regression-test
+- `resume_from`: 已在 Q&A 预览模型调用和估算聚合边界增加 `[DEBUG-qa-preview-20260723]` 脱敏计数日志；通过定向测试、部署后，在已认证页面以原文件和最大 Tokens `4196` 重现一次，按日志计数定位下一处修复。
+- `continuation_mode`: active
+- `handoff_summary`: 用户于 2026-07-23 确认原文件的 Q&A 预览仍为空。现有预算传递与解析兼容改动已部署但无法解释实际模型输出或聚合结果，因此仅增加不含原文、模型全文、Cookie 或密钥的诊断日志。
+- `evidence`: 远端访问日志已确认 `POST /console/api/datasets/indexing-estimate` 返回 HTTP 200；此前未出现可区分 `max_tokens`、源文本长度、模型响应长度、识别标签数、解析问答数与最终聚合数的应用日志。待本轮定向测试和真实页面重放后回填。
 - `confirmed_at`: 2026-07-23
 
 ## 2026-07-22 新需求：Q&A 生成预算页面配置
@@ -97,3 +97,9 @@
 
 - 现有回归测试已断言预览与异步索引均把 `process_rule.rules.qa_generation.max_tokens=1536` 传入 Q&A 生成器，生成器也以该值调用模型。
 - 本轮没有连接目标环境或读取用户文档、模型密钥、Cookie 或完整模型输出；因此部署后仍需在已认证页面确认响应的 `qa_preview` 非空，且设置的最大 Tokens 与请求值一致。
+## 2026-07-23 补充：真实运行时诊断
+
+- 预览模型调用完成后记录 `[DEBUG-qa-preview-20260723]` 脱敏摘要：租户标识、请求 `max_tokens`、源文本长度、模型响应长度、识别到的 Q&A 行标签数量和解析出的问答对数量。
+- 预览估算聚合完成后记录同一前缀摘要：租户标识、源文档数、最终生成问答对数量和请求 `max_tokens`。
+- 日志不记录上传文档正文、模型完整输出、认证 Cookie、模型密钥或数据库凭据。日志只用于区分配置未传递、无源文本、模型无输出、格式未识别、聚合丢失及前端渲染问题。
+- 成功收集一轮真实页面日志后，必须删除该前缀的临时诊断日志或将其改为持久化的、经过评审的业务可观测性。

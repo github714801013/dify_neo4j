@@ -107,6 +107,7 @@ class QAIndexProcessor(BaseIndexProcessor):
                 kwargs.get("doc_language", "English"),
                 format_errors,
                 max_tokens=qa_generation_max_tokens,
+                is_preview=True,
             )
         else:
             for i in range(0, len(all_documents), 10):
@@ -123,6 +124,7 @@ class QAIndexProcessor(BaseIndexProcessor):
                             "document_language": kwargs.get("doc_language", "English"),
                             "format_errors": format_errors,
                             "max_tokens": qa_generation_max_tokens,
+                            "is_preview": False,
                         },
                     )
                     threads.append(document_format_thread)
@@ -260,6 +262,7 @@ class QAIndexProcessor(BaseIndexProcessor):
         document_language,
         format_errors: list[Exception] | None = None,
         max_tokens: int = DEFAULT_QA_GENERATION_MAX_TOKENS,
+        is_preview: bool = False,
     ):
         format_documents = []
         if document_node.page_content is None or not document_node.page_content.strip():
@@ -274,6 +277,21 @@ class QAIndexProcessor(BaseIndexProcessor):
                     max_tokens=max_tokens,
                 )
                 document_qa_list = self._format_split_text(response)
+                if is_preview:
+                    recognized_label_count = sum(
+                        bool(self._QA_LABEL_PATTERN.match(line)) for line in response.splitlines()
+                    )
+                    logger.info(
+                        "[DEBUG-qa-preview-20260723] Q&A preview model response parsed "
+                        "(tenant_id=%s, max_tokens=%s, source_length=%s, response_length=%s, "
+                        "recognized_label_count=%s, parsed_pair_count=%s)",
+                        tenant_id,
+                        max_tokens,
+                        len(document_node.page_content),
+                        len(response),
+                        recognized_label_count,
+                        len(document_qa_list),
+                    )
                 if not document_qa_list:
                     recognized_label_count = sum(
                         bool(self._QA_LABEL_PATTERN.match(line)) for line in response.splitlines()
