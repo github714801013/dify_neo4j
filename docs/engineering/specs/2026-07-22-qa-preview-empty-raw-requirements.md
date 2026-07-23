@@ -2,15 +2,14 @@
 
 ## 阶段状态
 
-- `stage_status`: awaiting
+- `stage_status`: complete
 - `current_skill`: deployment
-- `next_skill`: deployment
-- `resume_from`: 已完成根因修复、定向回归、Ruff 检查和本地代码评审；获得本轮提交、推送和重新部署授权后，精确暂存本任务文件并发布，在已认证页面以原文件和最大 Tokens `4196` 重放。
-- `continuation_mode`: authorization
-- `handoff_summary`: 用户于 2026-07-23 重试后预览仍为空。远端诊断日志确认估算校验层丢弃了 `qa_generation.max_tokens=4196`，导致模型实际使用默认 `2000`；同时预览仅将 359 个分段中的首段（长度 9）发送给模型，模型返回空文本。现已让估算校验保留 Q&A 生成预算，并仅在预览中聚合开头连续分段至 1000 字符、最多 8000 字符；正式索引仍逐段生成问答。
-- `evidence`: 远端诊断日志记录 `max_tokens=2000`、`source_document_count=359`、`source_length=9`、`response_length=0`、`parsed_pair_count=0`；本地命令 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; uv run --project api python -m pytest -o addopts='' api/tests/unit_tests/services/test_dataset_service_document.py::TestDocumentServiceEstimateValidation api/tests/unit_tests/core/rag/indexing/processor/test_qa_index_processor.py` 通过 47 项；目标文件 Ruff 检查通过。
+- `next_skill`: user acceptance
+- `resume_from`: 用户在已认证页面使用同一 Markdown 文件、Q&A 分段模式和最大 Tokens `4196` 重放预览；随后读取 `[DEBUG-qa-preview-20260723]` 脱敏诊断日志，核对 `max_tokens=4196`、`source_length > 9`、`response_length > 0`、`parsed_pair_count > 0` 与 `generated_pair_count > 0`。
+- `continuation_mode`: manual
+- `handoff_summary`: 已提交并推送根因修复 `38f4355df2`，并从该提交创建的干净临时 worktree 构建、重新部署 API、Web、Worker 与 Worker Beat，镜像标签均为 `20260723-qa-preview-fix-38f4355`。远端 API 容器健康检查正常；登录态页面的业务验收尚待用户完成。
+- `evidence`: 远端诊断日志曾记录 `max_tokens=2000`、`source_document_count=359`、`source_length=9`、`response_length=0`、`parsed_pair_count=0`；本地定向 pytest 通过 47 项，目标文件 Ruff 检查通过；部署脚本返回 API `/health` 为 `{"pid":10,"status":"ok","version":"1.16.0-rc1"}`，且远端 API、Web、Worker、Worker Beat 均已运行目标镜像标签，其中 API 为 `healthy`。本机对配置 `APP_HOST:5001` 的直连收到空响应，未作为健康通过证据。
 - `confirmed_at`: 2026-07-23
-
 ## 2026-07-22 新需求：Q&A 生成预算页面配置
 
 ### 已确认
