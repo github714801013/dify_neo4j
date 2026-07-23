@@ -20,6 +20,7 @@ from configs import dify_config
 from core.errors.error import LLMBadRequestError, ProviderTokenNotInitError
 from core.helper.name_generator import generate_incremental_name
 from core.model_manager import ModelManager
+from core.rag.entities import QAGeneration
 from core.rag.index_processor.constant.built_in_field import BuiltInField
 from core.rag.index_processor.constant.index_type import IndexStructureType, IndexTechniqueType
 from core.rag.retrieval.retrieval_methods import RetrievalMethod
@@ -140,6 +141,7 @@ class _EstimateSegmentation(BaseModel):
 class _EstimateRules(BaseModel):
     pre_processing_rules: list[_EstimatePreProcessingRule]
     segmentation: _EstimateSegmentation
+    qa_generation: QAGeneration | None = None
 
     @field_validator("pre_processing_rules")
     @classmethod

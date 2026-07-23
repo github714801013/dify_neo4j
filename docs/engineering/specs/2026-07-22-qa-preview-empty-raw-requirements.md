@@ -2,13 +2,13 @@
 
 ## 阶段状态
 
-- `stage_status`: in_progress
-- `current_skill`: diagnosing-bugs
-- `next_skill`: regression-test
-- `resume_from`: 已在 Q&A 预览模型调用和估算聚合边界增加 `[DEBUG-qa-preview-20260723]` 脱敏计数日志；通过定向测试、部署后，在已认证页面以原文件和最大 Tokens `4196` 重现一次，按日志计数定位下一处修复。
-- `continuation_mode`: active
-- `handoff_summary`: 用户于 2026-07-23 确认原文件的 Q&A 预览仍为空。现有预算传递与解析兼容改动已部署但无法解释实际模型输出或聚合结果，因此仅增加不含原文、模型全文、Cookie 或密钥的诊断日志。
-- `evidence`: 远端访问日志已确认 `POST /console/api/datasets/indexing-estimate` 返回 HTTP 200；此前未出现可区分 `max_tokens`、源文本长度、模型响应长度、识别标签数、解析问答数与最终聚合数的应用日志。待本轮定向测试和真实页面重放后回填。
+- `stage_status`: awaiting
+- `current_skill`: deployment
+- `next_skill`: deployment
+- `resume_from`: 已完成根因修复、定向回归、Ruff 检查和本地代码评审；获得本轮提交、推送和重新部署授权后，精确暂存本任务文件并发布，在已认证页面以原文件和最大 Tokens `4196` 重放。
+- `continuation_mode`: authorization
+- `handoff_summary`: 用户于 2026-07-23 重试后预览仍为空。远端诊断日志确认估算校验层丢弃了 `qa_generation.max_tokens=4196`，导致模型实际使用默认 `2000`；同时预览仅将 359 个分段中的首段（长度 9）发送给模型，模型返回空文本。现已让估算校验保留 Q&A 生成预算，并仅在预览中聚合开头连续分段至 1000 字符、最多 8000 字符；正式索引仍逐段生成问答。
+- `evidence`: 远端诊断日志记录 `max_tokens=2000`、`source_document_count=359`、`source_length=9`、`response_length=0`、`parsed_pair_count=0`；本地命令 `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; uv run --project api python -m pytest -o addopts='' api/tests/unit_tests/services/test_dataset_service_document.py::TestDocumentServiceEstimateValidation api/tests/unit_tests/core/rag/indexing/processor/test_qa_index_processor.py` 通过 47 项；目标文件 Ruff 检查通过。
 - `confirmed_at`: 2026-07-23
 
 ## 2026-07-22 新需求：Q&A 生成预算页面配置

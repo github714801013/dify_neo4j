@@ -146,6 +146,47 @@ class TestQAIndexProcessor:
         mock_format.assert_called_once()
         assert mock_format.call_args.kwargs["is_preview"] is True
 
+    def test_transform_preview_aggregates_short_initial_chunks(
+        self, processor: QAIndexProcessor, process_rule: dict[str, Any], fake_flask_app
+    ) -> None:
+        document = Document(page_content="raw text", metadata={"dataset_id": "dataset-1", "document_id": "doc-1"})
+        splitter = Mock()
+        splitter.split_documents.return_value = [
+            Document(page_content="短标题", metadata={}),
+            Document(page_content="后续正文" * 300, metadata={}),
+        ]
+
+        with (
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.Rule.model_validate", return_value=self._rules()
+            ),
+            patch.object(processor, "_get_splitter", return_value=splitter),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.CleanProcessor.clean", return_value="clean text"
+            ),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.helper.generate_text_hash", return_value="hash"
+            ),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.remove_leading_symbols",
+                side_effect=lambda text: text,
+            ),
+            patch.object(processor, "_format_qa_document") as mock_format,
+            patch("core.rag.index_processor.processor.qa_index_processor.current_app") as mock_current_app,
+        ):
+            mock_current_app._get_current_object = Mock(return_value=fake_flask_app)
+            processor.transform(
+                [document],
+                process_rule=process_rule,
+                preview=True,
+                tenant_id="tenant-1",
+                doc_language="English",
+            )
+
+        preview_document = mock_format.call_args.args[2]
+        assert "后续正文" in preview_document.page_content
+        assert len(preview_document.page_content) > len("短标题")
+
     def test_transform_uses_custom_qa_generation_budget_for_preview(
         self, processor: QAIndexProcessor, fake_flask_app
     ) -> None:

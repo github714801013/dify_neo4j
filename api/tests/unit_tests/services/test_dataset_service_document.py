@@ -1529,6 +1529,23 @@ class TestDocumentServiceEstimateValidation:
             "segmentation": {"separator": "\n", "max_tokens": 128},
         }
 
+    def test_estimate_args_validate_preserves_qa_generation_budget(self):
+        args = {
+            "info_list": {"data_source_type": "upload_file"},
+            "process_rule": {
+                "mode": "custom",
+                "rules": {
+                    "pre_processing_rules": [{"id": "remove_stopwords", "enabled": True}],
+                    "segmentation": {"separator": "\n", "max_tokens": 128},
+                    "qa_generation": {"max_tokens": 4196},
+                },
+            },
+        }
+
+        DocumentService.estimate_args_validate(args)
+
+        assert args["process_rule"]["rules"]["qa_generation"] == {"max_tokens": 4196}
+
     def test_estimate_args_validate_requires_summary_index_provider_name(self):
         args = {
             "info_list": {"data_source_type": "upload_file"},

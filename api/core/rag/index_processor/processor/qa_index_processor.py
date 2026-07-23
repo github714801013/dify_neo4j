@@ -32,6 +32,9 @@ from services.summary_index_service import SummaryIndexService
 
 logger = logging.getLogger(__name__)
 
+QA_PREVIEW_MIN_SOURCE_LENGTH = 1000
+QA_PREVIEW_MAX_SOURCE_LENGTH = 8000
+
 
 class QAFormatPreviewDict(TypedDict):
     chunk_structure: str
@@ -102,7 +105,7 @@ class QAIndexProcessor(BaseIndexProcessor):
             self._format_qa_document(
                 current_app._get_current_object(),  # type: ignore
                 kwargs.get("tenant_id"),  # type: ignore
-                all_documents[0],
+                self._build_preview_document(all_documents),
                 all_qa_documents,
                 kwargs.get("doc_language", "English"),
                 format_errors,
@@ -134,6 +137,40 @@ class QAIndexProcessor(BaseIndexProcessor):
         if format_errors:
             raise format_errors[0]
         return all_qa_documents
+
+    @staticmethod
+    def _build_preview_document(documents: list[Document]) -> Document:
+        """构造长度受限的预览输入，且不改变正式索引的逐段处理行为。
+
+        预览不能只使用开头标题或短片段；连续聚合分段至足以生成问答的长度，
+        并限制总长度，避免将无界文档发送给模型。
+        """
+        preview_parts: list[str] = []
+        preview_metadata: dict[str, Any] | None = None
+        preview_length = 0
+
+        for document in documents:
+            page_content = document.page_content.strip()
+            if not page_content:
+                continue
+
+            separator = "\n\n" if preview_parts else ""
+            available_length = QA_PREVIEW_MAX_SOURCE_LENGTH - preview_length - len(separator)
+            if available_length <= 0:
+                break
+
+            if preview_metadata is None:
+                preview_metadata = document.metadata.copy() if document.metadata else {}
+
+            preview_parts.append(page_content[:available_length])
+            preview_length += len(separator) + min(len(page_content), available_length)
+            if preview_length >= QA_PREVIEW_MIN_SOURCE_LENGTH:
+                break
+
+        if not preview_parts:
+            raise ValueError("No non-empty document chunks available for Q&A preview.")
+
+        return Document(page_content="\n\n".join(preview_parts), metadata=preview_metadata)
 
     def format_by_template(self, file: FileStorage, **kwargs) -> list[Document]:
         # check file type
