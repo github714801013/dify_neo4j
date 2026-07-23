@@ -105,16 +105,15 @@ DEFAULT_SUGGESTED_QUESTIONS_AFTER_ANSWER_INSTRUCTION_PROMPT = (
 )
 
 GENERATOR_QA_PROMPT = (
-    "<Task> The user will send a long text. Generate a Question and Answer pairs only using the knowledge"
-    " in the long text. Please think step by step."
-    "Step 1: Understand and summarize the main content of this text.\n"
-    "Step 2: What key information or concepts are mentioned in this text?\n"
-    "Step 3: Decompose or combine multiple pieces of information and concepts.\n"
-    "Step 4: Generate questions and answers based on these key information and concepts.\n"
+    "<Task> The user will send a long text. Generate Question and Answer pairs only using the knowledge"
+    " in the long text. Think through the task internally, but do not output your reasoning.\n"
     "<Constraints> The questions should be clear and detailed, and the answers should be detailed and complete. "
     "You must answer in {language}, in a style that is clear and detailed in {language}."
     " No language other than {language} should be used. \n"
-    "<Format> Use the following format: Q1:\nA1:\nQ2:\nA2:...\n"
+    "<Format> Output only Q&A pairs. Do not include analysis, explanations, Markdown headings, lists, code fences, "
+    "or any text before or after the pairs. Each label and its content must be on the same line. "
+    "Use ASCII labels and sequential matching numbers exactly as follows:\n"
+    "Q1: question\nA1: answer\nQ2: question\nA2: answer\n"
     "<QA Pairs>"
 )
 

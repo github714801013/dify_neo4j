@@ -467,6 +467,33 @@ class TestQAIndexProcessor:
         assert all_qa_documents[0].metadata["answer"] == "A test."
         assert all_qa_documents[1].metadata["answer"] == "Coverage."
 
+    def test_format_qa_document_logs_unparseable_response(
+        self, processor: QAIndexProcessor, fake_flask_app, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        all_qa_documents: list[Document] = []
+        source_document = Document(page_content="source text", metadata={"origin": "doc-1"})
+
+        with (
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.LLMGenerator.generate_qa_document",
+                return_value="unsupported response",
+            ),
+            caplog.at_level(logging.WARNING, logger="core.rag.index_processor.processor.qa_index_processor"),
+        ):
+            processor._format_qa_document(
+                fake_flask_app,
+                "tenant-1",
+                source_document,
+                all_qa_documents,
+                "English",
+                max_tokens=1536,
+            )
+
+        assert all_qa_documents == []
+        assert len(caplog.records) == 1
+        assert "Generated Q&A response contains no parseable pairs" in caplog.records[0].message
+        assert "max_tokens=1536" in caplog.records[0].message
+
     def test_format_qa_document_logs_errors(
         self, processor: QAIndexProcessor, fake_flask_app, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -554,3 +581,25 @@ class TestQAIndexProcessor:
         parsed = processor._format_split_text("Q1: First?\nA1: One.\nQ2: Second?\nA2: Two.\n")
 
         assert parsed == [{"question": "First?", "answer": "One."}, {"question": "Second?", "answer": "Two."}]
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            (
+                "Question 1: What is the purpose?\nAnswer 1: To verify the preview.\n",
+                [{"question": "What is the purpose?", "answer": "To verify the preview."}],
+            ),
+            (
+                "**问题 1**：这是什么？\n**答案 1**：问答预览。\n",
+                [{"question": "这是什么？", "answer": "问答预览。"}],
+            ),
+            (
+                "Q1:\nWhat changed?\nA1:\nThe labels can be on their own lines.\n",
+                [{"question": "What changed?", "answer": "The labels can be on their own lines."}],
+            ),
+        ],
+    )
+    def test_format_split_text_accepts_common_question_answer_label_variants(
+        self, processor: QAIndexProcessor, text: str, expected: list[dict[str, str]]
+    ) -> None:
+        assert processor._format_split_text(text) == expected

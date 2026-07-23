@@ -4,7 +4,6 @@ import logging
 import re
 import threading
 import uuid
-from operator import itemgetter
 from typing import Any, TypedDict, override
 
 import pandas as pd
@@ -41,6 +40,12 @@ class QAFormatPreviewDict(TypedDict):
 
 
 class QAIndexProcessor(BaseIndexProcessor):
+    _QA_LABEL_PATTERN = re.compile(
+        r"^\s*(?:(?:[-+*]|\d+[.)])\s+)?(?:\*\*)?\s*"
+        r"(?P<label>Question|Q|问题|Answer|A|答案)\s*(?P<number>\d+)?\s*(?:\*\*)?\s*[:：](?:\*\*)?\s*(?P<content>.*)$",
+        re.IGNORECASE,
+    )
+
     @override
     def extract(self, extract_setting: ExtractSetting, **kwargs) -> list[Document]:
         text_docs = ExtractProcessor.extract(
@@ -269,6 +274,18 @@ class QAIndexProcessor(BaseIndexProcessor):
                     max_tokens=max_tokens,
                 )
                 document_qa_list = self._format_split_text(response)
+                if not document_qa_list:
+                    recognized_label_count = sum(
+                        bool(self._QA_LABEL_PATTERN.match(line)) for line in response.splitlines()
+                    )
+                    logger.warning(
+                        "Generated Q&A response contains no parseable pairs "
+                        "(tenant_id=%s, max_tokens=%s, response_length=%s, recognized_label_count=%s)",
+                        tenant_id,
+                        max_tokens,
+                        len(response),
+                        recognized_label_count,
+                    )
                 qa_documents = []
                 for result in document_qa_list:
                     qa_document = Document(page_content=result["question"], metadata=document_node.metadata.copy())
@@ -288,31 +305,64 @@ class QAIndexProcessor(BaseIndexProcessor):
             all_qa_documents.extend(format_documents)
 
     def _format_split_text(self, text: str) -> list[dict[str, str]]:
-        numbered_regex = (
-            r"(?m)^(?:\*\*)?Q[ \t]*(\d+)[ \t]*[:：](?:\*\*)?[ \t]*(.*?)\r?\n"
-            r"(?:\*\*)?A[ \t]*\1[ \t]*[:：](?:\*\*)?[ \t]*([\s\S]*?)"
-            r"(?=^(?:\*\*)?Q[ \t]*\d+[ \t]*[:：]|\Z)"
-        )
-        unnumbered_regex = (
-            r"(?m)^(?:\*\*)?Q[ \t]*[:：](?:\*\*)?[ \t]*(.*?)\r?\n"
-            r"(?:\*\*)?A[ \t]*[:：](?:\*\*)?[ \t]*([\s\S]*?)"
-            r"(?=^(?:\*\*)?Q[ \t]*[:：]|\Z)"
-        )
-
-        matches: list[tuple[int, int, dict[str, str]]] = []
-        for regex, question_group, answer_group in ((numbered_regex, 2, 3), (unnumbered_regex, 1, 2)):
-            for match in re.finditer(regex, text, re.UNICODE):
-                question = match.group(question_group).strip()
-                answer = re.sub(r"\n\s*", "\n", match.group(answer_group).strip())
-                if question and answer:
-                    matches.append((match.start(), match.end(), {"question": question, "answer": answer}))
-
         qa_pairs: list[dict[str, str]] = []
-        last_end = 0
-        for start, end, qa_pair in sorted(matches, key=itemgetter(0)):
-            if start < last_end:
+        question_lines: list[str] = []
+        answer_lines: list[str] = []
+        question_number: str | None = None
+        answer_started = False
+
+        def flush_pair() -> None:
+            question = "\n".join(question_lines).strip()
+            answer = "\n".join(answer_lines).strip()
+            if question and answer:
+                qa_pairs.append(
+                    {
+                        "question": question,
+                        "answer": re.sub(r"\n[ \t]*", "\n", answer),
+                    }
+                )
+
+        for line in text.splitlines():
+            match = self._QA_LABEL_PATTERN.match(line)
+            if not match:
+                if answer_started:
+                    answer_lines.append(line)
+                elif question_lines:
+                    question_lines.append(line)
                 continue
-            qa_pairs.append(qa_pair)
-            last_end = end
+
+            label = match.group("label").lower()
+            is_question_label = label in {"q", "question", "问题"}
+            number = match.group("number")
+            is_numbered = number is not None
+            content = match.group("content")
+
+            if is_question_label:
+                if answer_started:
+                    if is_numbered != (question_number is not None):
+                        answer_lines.append(line)
+                        continue
+                    flush_pair()
+                question_lines = [content]
+                answer_lines = []
+                question_number = number
+                answer_started = False
+                continue
+
+            if not question_lines:
+                continue
+            if is_numbered != (question_number is not None) or (is_numbered and number != question_number):
+                if answer_started:
+                    answer_lines.append(line)
+                continue
+            if answer_started:
+                answer_lines.append(line)
+                continue
+
+            answer_lines = [content]
+            answer_started = True
+
+        if answer_started:
+            flush_pair()
 
         return qa_pairs
