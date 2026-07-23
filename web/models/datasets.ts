@@ -298,11 +298,16 @@ export type ProcessRuleResponse = {
   summary_index_setting?: SummaryIndexSetting
 }
 
+export type QAGeneration = {
+  max_tokens: number
+}
+
 export type Rules = {
   pre_processing_rules: PreProcessingRule[]
   segmentation: Segmentation
   parent_mode: ParentMode
   subchunk_segmentation: Segmentation
+  qa_generation?: QAGeneration
 }
 
 type Limits = {

@@ -52,6 +52,11 @@ export const PreviewPanel: FC<PreviewPanelProps> = ({
   onPickerChange,
 }) => {
   const { t } = useTranslation()
+  const shouldShowQaEmptyState
+    = currentDocForm === ChunkingMode.qa
+      && !isIdle
+      && !isPending
+      && estimate?.qa_preview?.length === 0
 
   return (
     <FloatRightContainer isMobile={isMobile} isOpen={true} onClose={noop}>
@@ -89,6 +94,15 @@ export const PreviewPanel: FC<PreviewPanelProps> = ({
               <QAPreview qa={item} />
             </ChunkContainer>
           ))
+        )}
+
+        {/* QA Empty State */}
+        {shouldShowQaEmptyState && (
+          <div role="status" className="flex size-full items-center justify-center">
+            <p className="text-sm text-text-tertiary">
+              {t('stepTwo.qaPreviewEmpty', { ns: 'datasetCreation' })}
+            </p>
+          </div>
         )}
 
         {/* Text Preview */}

@@ -3,7 +3,14 @@ from core.rag.entities.context_entities import DocumentContext
 from core.rag.entities.event import DatasourceCompletedEvent, DatasourceErrorEvent, DatasourceProcessingEvent
 from core.rag.entities.index_entities import EconomySetting, EmbeddingSetting, IndexMethod
 from core.rag.entities.metadata_entities import Condition, MetadataFilteringCondition, SupportedComparisonOperator
-from core.rag.entities.processing_entities import ParentMode, PreProcessingRule, Rule, Segmentation
+from core.rag.entities.processing_entities import (
+    DEFAULT_QA_GENERATION_MAX_TOKENS,
+    ParentMode,
+    PreProcessingRule,
+    QAGeneration,
+    Rule,
+    Segmentation,
+)
 from core.rag.entities.retrieval_settings import (
     KeywordSetting,
     RerankingModelConfig,
@@ -12,6 +19,7 @@ from core.rag.entities.retrieval_settings import (
 )
 
 __all__ = [
+    "DEFAULT_QA_GENERATION_MAX_TOKENS",
     "Condition",
     "DatasourceCompletedEvent",
     "DatasourceErrorEvent",
@@ -24,6 +32,7 @@ __all__ = [
     "MetadataFilteringCondition",
     "ParentMode",
     "PreProcessingRule",
+    "QAGeneration",
     "RerankingModelConfig",
     "RetrievalSourceMetadata",
     "Rule",

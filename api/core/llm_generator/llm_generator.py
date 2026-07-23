@@ -27,6 +27,7 @@ from core.ops.entities.trace_entity import TraceTaskName
 from core.ops.ops_trace_manager import TraceQueueManager, TraceTask
 from core.ops.utils import measure_time
 from core.prompt.utils.prompt_template_parser import PromptTemplateParser
+from core.rag.entities.processing_entities import DEFAULT_QA_GENERATION_MAX_TOKENS
 from extensions.ext_database import db
 from extensions.ext_storage import storage
 from graphon.enums import WorkflowNodeExecutionMetadataKey
@@ -633,7 +634,13 @@ class LLMGenerator:
             return {"code": "", "language": args.code_language, "error": f"An unexpected error occurred: {str(e)}"}
 
     @classmethod
-    def generate_qa_document(cls, tenant_id: str, query, document_language: str):
+    def generate_qa_document(
+        cls,
+        tenant_id: str,
+        query: str,
+        document_language: str,
+        max_tokens: int = DEFAULT_QA_GENERATION_MAX_TOKENS,
+    ) -> str:
         prompt = GENERATOR_QA_PROMPT.format(language=document_language)
 
         model_manager = ModelManager.for_tenant(tenant_id=tenant_id)
@@ -647,7 +654,7 @@ class LLMGenerator:
         # Explicitly use the non-streaming overload
         result = model_instance.invoke_llm(
             prompt_messages=prompt_messages,
-            model_parameters={"temperature": 0.01, "max_tokens": 2000},
+            model_parameters={"temperature": 0.01, "max_tokens": max_tokens},
             stream=False,
         )
 

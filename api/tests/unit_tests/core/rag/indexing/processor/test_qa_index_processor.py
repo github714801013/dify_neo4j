@@ -8,6 +8,7 @@ import pytest
 from werkzeug.datastructures import FileStorage
 
 from core.entities.knowledge_entities import PreviewDetail
+from core.rag.entities import Rule
 from core.rag.index_processor.constant.index_type import IndexTechniqueType
 from core.rag.index_processor.processor.qa_index_processor import QAIndexProcessor
 from core.rag.models.document import AttachmentDocument, Document
@@ -54,9 +55,24 @@ class TestQAIndexProcessor:
             "rules": {"segmentation": {"max_tokens": 256, "chunk_overlap": 10, "separator": "\n"}},
         }
 
-    def _rules(self) -> SimpleNamespace:
+    def _rules(self, qa_generation_max_tokens: int = 2000) -> SimpleNamespace:
         segmentation = SimpleNamespace(max_tokens=256, chunk_overlap=10, separator="\n")
-        return SimpleNamespace(segmentation=segmentation)
+        qa_generation = SimpleNamespace(max_tokens=qa_generation_max_tokens)
+        return SimpleNamespace(segmentation=segmentation, qa_generation=qa_generation)
+
+    def test_rule_defaults_qa_generation_budget_for_legacy_rules(self) -> None:
+        rules = Rule.model_validate({"segmentation": {"max_tokens": 256}})
+
+        assert rules.qa_generation.max_tokens == 2000
+
+    def test_rule_rejects_non_positive_qa_generation_budget(self) -> None:
+        with pytest.raises(ValueError, match="greater than 0"):
+            Rule.model_validate(
+                {
+                    "segmentation": {"max_tokens": 256},
+                    "qa_generation": {"max_tokens": 0},
+                }
+            )
 
     def test_extract_forwards_automatic_flag(self, processor: QAIndexProcessor) -> None:
         extract_setting = Mock()
@@ -87,7 +103,13 @@ class TestQAIndexProcessor:
         splitter.split_documents.return_value = [split_node]
 
         def _append_document(
-            flask_app, tenant_id, document_node, all_qa_documents, document_language, format_errors=None
+            flask_app,
+            tenant_id,
+            document_node,
+            all_qa_documents,
+            document_language,
+            format_errors=None,
+            max_tokens=2000,
         ):
             all_qa_documents.append(Document(page_content="Q1", metadata={"answer": "A1"}))
 
@@ -122,6 +144,51 @@ class TestQAIndexProcessor:
         assert result[0].metadata["answer"] == "A1"
         mock_format.assert_called_once()
 
+    def test_transform_uses_custom_qa_generation_budget_for_preview(
+        self, processor: QAIndexProcessor, fake_flask_app
+    ) -> None:
+        document = Document(page_content="raw text", metadata={"dataset_id": "dataset-1", "document_id": "doc-1"})
+        split_node = Document(page_content="question", metadata={})
+        splitter = Mock()
+        splitter.split_documents.return_value = [split_node]
+        process_rule = {
+            "mode": "custom",
+            "rules": {
+                "segmentation": {"max_tokens": 256, "chunk_overlap": 10, "separator": "\n"},
+                "qa_generation": {"max_tokens": 1536},
+            },
+        }
+
+        with (
+            patch.object(processor, "_get_splitter", return_value=splitter),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.CleanProcessor.clean", return_value="clean text"
+            ),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.helper.generate_text_hash", return_value="hash"
+            ),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.remove_leading_symbols",
+                side_effect=lambda text: text,
+            ),
+            patch(
+                "core.rag.index_processor.processor.qa_index_processor.LLMGenerator.generate_qa_document",
+                return_value="Q1: Question\nA1: Answer",
+            ) as mock_generate,
+            patch("core.rag.index_processor.processor.qa_index_processor.current_app") as mock_current_app,
+        ):
+            mock_current_app._get_current_object = Mock(return_value=fake_flask_app)
+            result = processor.transform(
+                [document],
+                process_rule=process_rule,
+                preview=True,
+                tenant_id="tenant-1",
+                doc_language="English",
+            )
+
+        assert len(result) == 1
+        mock_generate.assert_called_once_with("tenant-1", "question", "English", max_tokens=1536)
+
     def test_transform_non_preview_uses_thread_batches(
         self, processor: QAIndexProcessor, process_rule: dict[str, Any], fake_flask_app
     ) -> None:
@@ -134,13 +201,20 @@ class TestQAIndexProcessor:
         splitter.split_documents.return_value = [split_node]
 
         def _append_document(
-            flask_app, tenant_id, document_node, all_qa_documents, document_language, format_errors=None
+            flask_app,
+            tenant_id,
+            document_node,
+            all_qa_documents,
+            document_language,
+            format_errors=None,
+            max_tokens=2000,
         ):
             all_qa_documents.append(Document(page_content=f"Q-{document_node.page_content}", metadata={"answer": "A"}))
 
         with (
             patch(
-                "core.rag.index_processor.processor.qa_index_processor.Rule.model_validate", return_value=self._rules()
+                "core.rag.index_processor.processor.qa_index_processor.Rule.model_validate",
+                return_value=self._rules(qa_generation_max_tokens=1536),
             ),
             patch.object(processor, "_get_splitter", return_value=splitter),
             patch(
@@ -165,6 +239,7 @@ class TestQAIndexProcessor:
 
         assert len(result) == 2
         assert mock_format.call_count == 2
+        assert [call.kwargs["max_tokens"] for call in mock_format.call_args_list] == [1536, 1536]
 
     def test_transform_propagates_qa_generation_error(
         self, processor: QAIndexProcessor, process_rule: dict[str, Any], fake_flask_app
@@ -411,6 +486,37 @@ class TestQAIndexProcessor:
         assert len(caplog.records) == 1
         assert caplog.records[0].levelname == "ERROR"
         assert "Failed to format qa document" in caplog.records[0].message
+
+    def test_format_split_text_extracts_markdown_wrapped_full_width_question_answer_pairs(
+        self, processor: QAIndexProcessor
+    ) -> None:
+        parsed = processor._format_split_text("**Q1：** 问题一\n**A1：** 答案一\n")
+
+        assert parsed == [{"question": "问题一", "answer": "答案一"}]
+
+    def test_format_split_text_extracts_full_width_question_answer_pairs(self, processor: QAIndexProcessor) -> None:
+        parsed = processor._format_split_text("Q1：问题一\nA1：答案一\n")
+
+        assert parsed == [{"question": "问题一", "answer": "答案一"}]
+
+    def test_format_split_text_skips_incomplete_or_mismatched_question_answer_pairs(
+        self, processor: QAIndexProcessor
+    ) -> None:
+        parsed = processor._format_split_text(
+            "Q1：\nA1：缺少问题\nQ2：问题二\nA3：编号不匹配\nQ3：问题三\nA3：答案三\nQ4：问题四\nA4："
+        )
+
+        assert parsed == [{"question": "问题三", "answer": "答案三"}]
+
+    def test_format_split_text_preserves_question_markers_in_answer_text(self, processor: QAIndexProcessor) -> None:
+        parsed = processor._format_split_text("Q1：问题一\nA1：答案引用 Q 2：不是新的问答标签。\n")
+
+        assert parsed == [{"question": "问题一", "answer": "答案引用 Q 2：不是新的问答标签。"}]
+
+    def test_format_split_text_skips_labels_split_across_lines(self, processor: QAIndexProcessor) -> None:
+        parsed = processor._format_split_text("Q\n1: 非法问题标签\nA\n1: 非法答案标签")
+
+        assert parsed == []
 
     def test_format_split_text_extracts_question_answer_pairs(self, processor: QAIndexProcessor) -> None:
         parsed = processor._format_split_text("Q1: First?\nA1: One.\nQ2: Second?\nA2: Two.\n")

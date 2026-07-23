@@ -151,6 +151,27 @@ export const MaxLengthInput: FC<LabeledCompoundNumberInputProps> = (props) => {
   )
 }
 
+export const QAGenerationMaxTokensInput: FC<LabeledCompoundNumberInputProps> = (props) => {
+  const { t } = useTranslation()
+  const label = t('stepTwo.qaGenerationMaxTokens', { ns: 'datasetCreation' })
+
+  return (
+    <FormField label={(
+      <div className="mb-1 system-sm-semibold">
+        {label}
+      </div>
+    )}
+    >
+      <CompoundNumberInput
+        label={label}
+        size="large"
+        {...props}
+        min={1}
+      />
+    </FormField>
+  )
+}
+
 export const OverlapInput: FC<LabeledCompoundNumberInputProps> = (props) => {
   const { t } = useTranslation()
   const label = t('stepTwo.overlap', { ns: 'datasetCreation' })

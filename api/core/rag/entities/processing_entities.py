@@ -25,6 +25,9 @@ class PreProcessingRule(BaseModel):
     enabled: bool = Field(description="Whether this preprocessing rule is enabled.")
 
 
+DEFAULT_QA_GENERATION_MAX_TOKENS = 2000
+
+
 class Segmentation(BaseModel):
     # TODO: there are internally mismatched / inconsistent naming
     # between `separator` and `delimiter` across the codebase.
@@ -38,12 +41,24 @@ class Segmentation(BaseModel):
     chunk_overlap: int = Field(default=0, description="Token overlap between chunks.")
 
 
+class QAGeneration(BaseModel):
+    max_tokens: int = Field(
+        default=DEFAULT_QA_GENERATION_MAX_TOKENS,
+        gt=0,
+        description="Maximum output token count for Q&A generation.",
+    )
+
+
 class Rule(BaseModel):
     pre_processing_rules: list[PreProcessingRule] | None = Field(
         default=None,
         description="Pre-processing rules to apply before segmentation.",
     )
     segmentation: Segmentation | None = Field(default=None, description="Parent chunk segmentation settings.")
+    qa_generation: QAGeneration = Field(
+        default_factory=QAGeneration,
+        description="Q&A generation settings.",
+    )
     parent_mode: Literal["full-doc", "paragraph"] | None = Field(
         default=None,
         description="Parent-child segmentation mode.",

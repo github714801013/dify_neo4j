@@ -17,7 +17,7 @@ from core.llm_generator.llm_generator import LLMGenerator
 from core.rag.cleaner.clean_processor import CleanProcessor
 from core.rag.datasource.vdb.vector_factory import Vector
 from core.rag.docstore.dataset_docstore import DatasetDocumentStore
-from core.rag.entities import Rule
+from core.rag.entities import DEFAULT_QA_GENERATION_MAX_TOKENS, Rule
 from core.rag.extractor.entity.extract_setting import ExtractSetting
 from core.rag.extractor.extract_processor import ExtractProcessor
 from core.rag.index_processor.constant.index_type import IndexStructureType, IndexTechniqueType
@@ -59,6 +59,7 @@ class QAIndexProcessor(BaseIndexProcessor):
         if not process_rule.get("rules"):
             raise ValueError("No rules found in process rule.")
         rules = Rule.model_validate(process_rule.get("rules"))
+        qa_generation_max_tokens = rules.qa_generation.max_tokens
         splitter = self._get_splitter(
             processing_rule_mode=process_rule.get("mode"),
             max_tokens=rules.segmentation.max_tokens if rules.segmentation else 0,
@@ -99,6 +100,7 @@ class QAIndexProcessor(BaseIndexProcessor):
                 all_qa_documents,
                 kwargs.get("doc_language", "English"),
                 format_errors,
+                max_tokens=qa_generation_max_tokens,
             )
         else:
             for i in range(0, len(all_documents), 10):
@@ -114,6 +116,7 @@ class QAIndexProcessor(BaseIndexProcessor):
                             "all_qa_documents": all_qa_documents,
                             "document_language": kwargs.get("doc_language", "English"),
                             "format_errors": format_errors,
+                            "max_tokens": qa_generation_max_tokens,
                         },
                     )
                     threads.append(document_format_thread)
@@ -250,6 +253,7 @@ class QAIndexProcessor(BaseIndexProcessor):
         all_qa_documents,
         document_language,
         format_errors: list[Exception] | None = None,
+        max_tokens: int = DEFAULT_QA_GENERATION_MAX_TOKENS,
     ):
         format_documents = []
         if document_node.page_content is None or not document_node.page_content.strip():
@@ -257,7 +261,12 @@ class QAIndexProcessor(BaseIndexProcessor):
         with flask_app.app_context():
             try:
                 # qa model document
-                response = LLMGenerator.generate_qa_document(tenant_id, document_node.page_content, document_language)
+                response = LLMGenerator.generate_qa_document(
+                    tenant_id,
+                    document_node.page_content,
+                    document_language,
+                    max_tokens=max_tokens,
+                )
                 document_qa_list = self._format_split_text(response)
                 qa_documents = []
                 for result in document_qa_list:
@@ -277,8 +286,16 @@ class QAIndexProcessor(BaseIndexProcessor):
 
             all_qa_documents.extend(format_documents)
 
-    def _format_split_text(self, text):
-        regex = r"Q\d+:\s*(.*?)\s*A\d+:\s*([\s\S]*?)(?=Q\d+:|$)"
+    def _format_split_text(self, text: str) -> list[dict[str, str]]:
+        regex = (
+            r"(?m)^(?:\*\*)?Q[ \t]*(\d+)[ \t]*[:：](?:\*\*)?[ \t]*(.*?)\r?\n"
+            r"(?:\*\*)?A[ \t]*\1[ \t]*[:：](?:\*\*)?[ \t]*([\s\S]*?)"
+            r"(?=^(?:\*\*)?Q[ \t]*\d+[ \t]*[:：]|\Z)"
+        )
         matches = re.findall(regex, text, re.UNICODE)
 
-        return [{"question": q, "answer": re.sub(r"\n\s*", "\n", a.strip())} for q, a in matches if q and a]
+        return [
+            {"question": question, "answer": re.sub(r"\n\s*", "\n", answer.strip())}
+            for _, question, answer in matches
+            if question and answer
+        ]

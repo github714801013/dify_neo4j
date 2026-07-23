@@ -9,6 +9,7 @@ import unescape from './unescape'
 export const DEFAULT_SEGMENT_IDENTIFIER = '\\n\\n'
 export const DEFAULT_MAXIMUM_CHUNK_LENGTH = 1024
 export const DEFAULT_OVERLAP = 50
+export const DEFAULT_QA_GENERATION_MAX_TOKENS = 2000
 export const MAXIMUM_CHUNK_TOKEN_LENGTH = env.NEXT_PUBLIC_INDEXING_MAX_SEGMENTATION_TOKENS_LENGTH
 
 export type ParentChildConfig = {
@@ -53,6 +54,7 @@ export const useSegmentationState = (options: UseSegmentationStateOptions = {}) 
   const [maxChunkLength, setMaxChunkLength] = useState(DEFAULT_MAXIMUM_CHUNK_LENGTH)
   const [limitMaxChunkLength, setLimitMaxChunkLength] = useState(MAXIMUM_CHUNK_TOKEN_LENGTH)
   const [overlap, setOverlap] = useState(DEFAULT_OVERLAP)
+  const [qaGenerationMaxTokens, setQAGenerationMaxTokens] = useState(DEFAULT_QA_GENERATION_MAX_TOKENS)
 
   // Pre-processing rules
   const [rules, setRules] = useState<PreProcessingRule[]>([])
@@ -96,6 +98,7 @@ export const useSegmentationState = (options: UseSegmentationStateOptions = {}) 
       setRules(defaultConfig.pre_processing_rules)
     }
     setParentChildConfig(defaultParentChildConfig)
+    setQAGenerationMaxTokens(DEFAULT_QA_GENERATION_MAX_TOKENS)
   }, [defaultConfig, setSegmentIdentifier])
 
   // Apply config from document detail
@@ -109,6 +112,7 @@ export const useSegmentationState = (options: UseSegmentationStateOptions = {}) 
     setOverlap(chunkOverlap!)
     setRules(rulesConfig.pre_processing_rules)
     setDefaultConfig(rulesConfig)
+    setQAGenerationMaxTokens(rulesConfig.qa_generation?.max_tokens ?? DEFAULT_QA_GENERATION_MAX_TOKENS)
 
     if (isHierarchical) {
       setParentChildConfig({
@@ -146,19 +150,24 @@ export const useSegmentationState = (options: UseSegmentationStateOptions = {}) 
       } as ProcessRule
     }
 
-    return {
-      rules: {
-        pre_processing_rules: rules,
-        segmentation: {
-          separator: unescape(segmentIdentifier),
-          max_tokens: maxChunkLength,
-          chunk_overlap: overlap,
-        },
+    const processRules = {
+      pre_processing_rules: rules,
+      segmentation: {
+        separator: unescape(segmentIdentifier),
+        max_tokens: maxChunkLength,
+        chunk_overlap: overlap,
       },
+    } as Rules
+
+    if (docForm === ChunkingMode.qa)
+      processRules.qa_generation = { max_tokens: qaGenerationMaxTokens }
+
+    return {
+      rules: processRules,
       mode: segmentationType,
       summary_index_setting: summaryIndexSettingRef.current,
     } as ProcessRule
-  }, [rules, parentChildConfig, segmentIdentifier, maxChunkLength, overlap, segmentationType])
+  }, [rules, parentChildConfig, segmentIdentifier, maxChunkLength, overlap, segmentationType, qaGenerationMaxTokens])
 
   // Update parent config field
   const updateParentConfig = useCallback((field: 'delimiter' | 'maxLength', value: string | number) => {
@@ -207,6 +216,8 @@ export const useSegmentationState = (options: UseSegmentationStateOptions = {}) 
     setLimitMaxChunkLength,
     overlap,
     setOverlap,
+    qaGenerationMaxTokens,
+    setQAGenerationMaxTokens,
 
     // Rules
     rules,

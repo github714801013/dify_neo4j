@@ -78,6 +78,20 @@ describe('useDocumentCreation', () => {
     mocks.isReRankModelSelected.mockReturnValue(true)
   })
 
+  const qaProcessRule = {
+    mode: 'custom',
+    rules: {
+      pre_processing_rules: [],
+      segmentation: {
+        separator: '\n\n',
+        max_tokens: 1024,
+        chunk_overlap: 50,
+      },
+      qa_generation: {
+        max_tokens: 1536,
+      },
+    },
+  } as unknown as ProcessRule
   describe('validateParams', () => {
     it('should return true for valid params', () => {
       const { result } = renderHook(() => useDocumentCreation(defaultOptions))
@@ -171,6 +185,27 @@ describe('useDocumentCreation', () => {
       expect(params!.embedding_model_provider).toBe('openai')
     })
 
+    it('should pass the Q&A generation budget unchanged to the creation request', async () => {
+      const { result } = renderHook(() => useDocumentCreation(defaultOptions))
+      const params = result.current.buildCreationParams(
+        ChunkingMode.qa,
+        'English',
+        qaProcessRule,
+        defaultValidationParams.retrievalConfig,
+        { provider: 'openai', model: 'text-embedding-3-small' },
+        'high_quality',
+      )
+
+      expect(params?.process_rule).toBe(qaProcessRule)
+      expect(params?.process_rule.rules.qa_generation).toEqual({ max_tokens: 1536 })
+
+      await result.current.executeCreation(params!, IndexingType.QUALIFIED, defaultValidationParams.retrievalConfig)
+
+      expect(mocks.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+        doc_form: ChunkingMode.qa,
+        process_rule: qaProcessRule,
+      }), expect.any(Object))
+    })
     it('should include GraphRAG config in the first document creation request', () => {
       const { result } = renderHook(() => useDocumentCreation(defaultOptions))
       const graphRagConfig: GraphRagConfig = {

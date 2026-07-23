@@ -1,5 +1,6 @@
 import type { PreProcessingRule } from '@/models/datasets'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChunkingMode } from '@/models/datasets'
 import { GeneralChunkingOptions } from '../general-chunking-options'
@@ -27,6 +28,7 @@ const defaultProps = {
   segmentIdentifier: '\\n',
   maxChunkLength: 500,
   overlap: 50,
+  qaGenerationMaxTokens: 2000,
   rules: createRules(),
   currentDocForm: ChunkingMode.text,
   docLanguage: 'English',
@@ -37,6 +39,7 @@ const defaultProps = {
   onSegmentIdentifierChange: vi.fn(),
   onMaxChunkLengthChange: vi.fn(),
   onOverlapChange: vi.fn(),
+  onQAGenerationMaxTokensChange: vi.fn(),
   onRuleToggle: vi.fn(),
   onDocFormChange: vi.fn(),
   onDocLanguageChange: vi.fn(),
@@ -144,6 +147,55 @@ describe('GeneralChunkingOptions', () => {
     it('should show QA warning tip when in QA mode', () => {
       render(<GeneralChunkingOptions {...defaultProps} currentDocForm={ChunkingMode.qa} />)
       expect(screen.getAllByText(`${ns}.stepTwo.QATip`).length).toBeGreaterThan(0)
+    })
+
+    it('should show the Q&A generation budget input only in Q&A mode', () => {
+      const { rerender } = render(<GeneralChunkingOptions {...defaultProps} />)
+      expect(screen.queryByRole('textbox', { name: /qaGenerationMaxTokens/ })).not.toBeInTheDocument()
+      rerender(<GeneralChunkingOptions {...defaultProps} currentDocForm={ChunkingMode.qa} />)
+      expect(screen.getByRole('textbox', { name: /qaGenerationMaxTokens/ })).toHaveValue('2,000')
+    })
+
+    it('should preserve the Q&A generation budget after switching away and back', () => {
+      const TestHarness = () => {
+        const [currentDocForm, setCurrentDocForm] = useState(ChunkingMode.qa)
+        const [qaGenerationMaxTokens, setQAGenerationMaxTokens] = useState(1536)
+
+        return (
+          <GeneralChunkingOptions
+            {...defaultProps}
+            currentDocForm={currentDocForm}
+            qaGenerationMaxTokens={qaGenerationMaxTokens}
+            onDocFormChange={setCurrentDocForm}
+            onQAGenerationMaxTokensChange={setQAGenerationMaxTokens}
+          />
+        )
+      }
+
+      render(<TestHarness />)
+      expect(screen.getByRole('textbox', { name: /qaGenerationMaxTokens/ })).toHaveValue('1,536')
+
+      fireEvent.click(screen.getByText(`${ns}.stepTwo.useQALanguage`))
+      expect(screen.queryByRole('textbox', { name: /qaGenerationMaxTokens/ })).not.toBeInTheDocument()
+
+      fireEvent.click(screen.getByText(`${ns}.stepTwo.useQALanguage`))
+      expect(screen.getByRole('textbox', { name: /qaGenerationMaxTokens/ })).toHaveValue('1,536')
+    })
+    it('should update the Q&A generation budget through the existing number input', () => {
+      const onQAGenerationMaxTokensChange = vi.fn()
+      render(
+        <GeneralChunkingOptions
+          {...defaultProps}
+          currentDocForm={ChunkingMode.qa}
+          onQAGenerationMaxTokensChange={onQAGenerationMaxTokensChange}
+        />,
+      )
+
+      fireEvent.change(screen.getByRole('textbox', { name: /qaGenerationMaxTokens/ }), {
+        target: { value: '1536' },
+      })
+
+      expect(onQAGenerationMaxTokensChange).toHaveBeenCalledWith(1536)
     })
   })
 

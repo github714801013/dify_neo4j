@@ -90,6 +90,19 @@ describe('PreviewPanel', () => {
     onPickerChange: vi.fn(),
   }
 
+  const createMockEstimate = (
+    overrides: Partial<FileIndexingEstimateResponse> = {},
+  ): FileIndexingEstimateResponse => ({
+    total_segments: 10,
+    total_nodes: 10,
+    tokens: 5000,
+    total_price: 0.01,
+    currency: 'USD',
+    preview: [],
+    qa_preview: [{ question: 'Q1', answer: 'A1' }],
+    ...overrides,
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -115,52 +128,92 @@ describe('PreviewPanel', () => {
   })
 
   it('should render text preview chunks', () => {
-    const estimate: Partial<FileIndexingEstimateResponse> = {
+    const estimate = createMockEstimate({
       total_segments: 2,
       preview: [
         { content: 'chunk 1 text', child_chunks: [], summary: '' },
         { content: 'chunk 2 text', child_chunks: [], summary: 'summary text' },
       ],
-    }
-    render(<PreviewPanel {...defaultProps} estimate={estimate as FileIndexingEstimateResponse} />)
+    })
+    render(<PreviewPanel {...defaultProps} estimate={estimate} />)
     expect(screen.getAllByTestId('chunk-container')).toHaveLength(2)
   })
 
   it('should render QA preview', () => {
-    const estimate: Partial<FileIndexingEstimateResponse> = {
+    const estimate = createMockEstimate({
       qa_preview: [
         { question: 'Q1', answer: 'A1' },
       ],
-    }
+    })
     render(
       <PreviewPanel
         {...defaultProps}
         currentDocForm={ChunkingMode.qa}
-        estimate={estimate as FileIndexingEstimateResponse}
+        estimate={estimate}
       />,
     )
     expect(screen.getByTestId('qa-preview')).toHaveTextContent('Q1')
   })
 
+  it('should show an empty state when the QA preview has no question-answer pairs', () => {
+    render(
+      <PreviewPanel
+        {...defaultProps}
+        currentDocForm={ChunkingMode.qa}
+        estimate={createMockEstimate({ qa_preview: [] })}
+      />,
+    )
+
+    expect(screen.getByRole('status')).toHaveTextContent('datasetCreation.stepTwo.qaPreviewEmpty')
+  })
+
+  it('should prioritize the idle state over the QA empty state', () => {
+    render(
+      <PreviewPanel
+        {...defaultProps}
+        currentDocForm={ChunkingMode.qa}
+        estimate={createMockEstimate({ qa_preview: [] })}
+        isIdle={true}
+      />,
+    )
+
+    expect(screen.getByText('datasetCreation.stepTwo.previewChunkTip')).toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('should prioritize the loading state over the QA empty state', () => {
+    render(
+      <PreviewPanel
+        {...defaultProps}
+        currentDocForm={ChunkingMode.qa}
+        estimate={createMockEstimate({ qa_preview: [] })}
+        isPending={true}
+      />,
+    )
+
+    expect(screen.getAllByTestId('skeleton')).toHaveLength(10)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
   it('should render parent-child preview', () => {
-    const estimate: Partial<FileIndexingEstimateResponse> = {
+    const estimate = createMockEstimate({
       preview: [
         { content: 'parent chunk', child_chunks: ['child1', 'child2'], summary: '' },
       ],
-    }
+    })
     render(
       <PreviewPanel
         {...defaultProps}
         currentDocForm={ChunkingMode.parentChild}
-        estimate={estimate as FileIndexingEstimateResponse}
+        estimate={estimate}
       />,
     )
     expect(screen.getAllByTestId('preview-slice')).toHaveLength(2)
   })
 
   it('should show badge with chunk count for non-QA mode', () => {
-    const estimate: Partial<FileIndexingEstimateResponse> = { total_segments: 5, preview: [] }
-    render(<PreviewPanel {...defaultProps} estimate={estimate as FileIndexingEstimateResponse} />)
+    const estimate = createMockEstimate({ total_segments: 5, preview: [] })
+    render(<PreviewPanel {...defaultProps} estimate={estimate} />)
     expect(screen.getByTestId('badge')).toBeInTheDocument()
   })
 })

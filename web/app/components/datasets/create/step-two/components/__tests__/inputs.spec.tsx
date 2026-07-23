@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { DelimiterInput, MaxLengthInput, OverlapInput } from '../inputs'
+import { env } from '@/env'
+import { DelimiterInput, MaxLengthInput, OverlapInput, QAGenerationMaxTokensInput } from '../inputs'
 
 // i18n mock returns namespaced keys like "datasetCreation.stepTwo.separator"
 const ns = 'datasetCreation'
@@ -134,5 +135,24 @@ describe('OverlapInput', () => {
 
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '150' } })
     expect(onChange).toHaveBeenLastCalledWith(100)
+  })
+})
+
+describe('QAGenerationMaxTokensInput', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('should allow Q&A generation budgets above the segmentation limit', () => {
+    const onChange = vi.fn()
+    const maxTokens = env.NEXT_PUBLIC_INDEXING_MAX_SEGMENTATION_TOKENS_LENGTH
+    render(<QAGenerationMaxTokensInput value={2000} onChange={onChange} />)
+
+    const input = screen.getByRole('textbox', { name: /qaGenerationMaxTokens/ })
+    fireEvent.change(input, { target: { value: '0' } })
+    expect(onChange).toHaveBeenLastCalledWith(1)
+
+    fireEvent.change(input, { target: { value: String(maxTokens + 1) } })
+    expect(onChange).toHaveBeenLastCalledWith(maxTokens + 1)
   })
 })

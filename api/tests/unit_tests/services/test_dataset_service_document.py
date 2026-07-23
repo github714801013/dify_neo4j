@@ -1691,6 +1691,7 @@ class TestDocumentServiceSaveDocumentAdditionalBranches:
                 rules=Rule(
                     pre_processing_rules=[PreProcessingRule(id="remove_stopwords", enabled=True)],
                     segmentation=Segmentation(separator="\n", max_tokens=128),
+                    qa_generation={"max_tokens": 1536},
                 ),
             ),
         )
@@ -1721,12 +1722,12 @@ class TestDocumentServiceSaveDocumentAdditionalBranches:
 
         assert documents == [created_document]
         assert batch == "20260101010101100023"
-        assert process_rule_cls.call_args.kwargs == {
-            "dataset_id": "dataset-1",
-            "mode": "custom",
-            "rules": knowledge_config.process_rule.rules.model_dump_json(),
-            "created_by": "user-1",
-        }
+        saved_rules = json.loads(process_rule_cls.call_args.kwargs["rules"])
+        assert process_rule_cls.call_args.kwargs["dataset_id"] == "dataset-1"
+        assert process_rule_cls.call_args.kwargs["mode"] == "custom"
+        assert process_rule_cls.call_args.kwargs["created_by"] == "user-1"
+        assert saved_rules["segmentation"]["max_tokens"] == 128
+        assert saved_rules["qa_generation"]["max_tokens"] == 1536
         document_proxy_cls.assert_called_once_with("tenant-1", "dataset-1", ["doc-created"])
         document_proxy_cls.return_value.delay.assert_called_once()
 

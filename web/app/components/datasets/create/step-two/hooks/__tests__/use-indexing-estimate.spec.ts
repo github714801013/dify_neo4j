@@ -1,9 +1,9 @@
 import type { IndexingType } from '../use-indexing-config'
 import type { NotionPage } from '@/models/common'
-import type { ChunkingMode, CrawlResultItem, CustomFile, ProcessRule } from '@/models/datasets'
+import type { CrawlResultItem, CustomFile, ProcessRule } from '@/models/datasets'
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { DataSourceType } from '@/models/datasets'
+import { ChunkingMode, DataSourceType } from '@/models/datasets'
 
 // Hoisted mocks
 const mocks = vi.hoisted(() => ({
@@ -13,30 +13,33 @@ const mocks = vi.hoisted(() => ({
   notionReset: vi.fn(),
   webMutate: vi.fn(),
   webReset: vi.fn(),
-}))
-
-vi.mock('@/service/knowledge/use-create-dataset', () => ({
-  useFetchFileIndexingEstimateForFile: () => ({
+  useFetchFileIndexingEstimateForFile: vi.fn(() => ({
     mutate: mocks.fileMutate,
     reset: mocks.fileReset,
     data: { tokens: 100, total_segments: 5 },
     isIdle: true,
     isPending: false,
-  }),
-  useFetchFileIndexingEstimateForNotion: () => ({
+  })),
+  useFetchFileIndexingEstimateForNotion: vi.fn(() => ({
     mutate: mocks.notionMutate,
     reset: mocks.notionReset,
     data: null,
     isIdle: true,
     isPending: false,
-  }),
-  useFetchFileIndexingEstimateForWeb: () => ({
+  })),
+  useFetchFileIndexingEstimateForWeb: vi.fn(() => ({
     mutate: mocks.webMutate,
     reset: mocks.webReset,
     data: null,
     isIdle: true,
     isPending: false,
-  }),
+  })),
+}))
+
+vi.mock('@/service/knowledge/use-create-dataset', () => ({
+  useFetchFileIndexingEstimateForFile: mocks.useFetchFileIndexingEstimateForFile,
+  useFetchFileIndexingEstimateForNotion: mocks.useFetchFileIndexingEstimateForNotion,
+  useFetchFileIndexingEstimateForWeb: mocks.useFetchFileIndexingEstimateForWeb,
 }))
 
 const { useIndexingEstimate } = await import('../use-indexing-estimate')
@@ -81,6 +84,33 @@ describe('useIndexingEstimate', () => {
     })
   })
 
+  it('should pass the Q&A generation budget to the preview request', () => {
+    const processRule = {
+      mode: 'custom',
+      rules: {
+        pre_processing_rules: [],
+        segmentation: {
+          separator: '\n\n',
+          max_tokens: 1024,
+          chunk_overlap: 50,
+        },
+        qa_generation: {
+          max_tokens: 1536,
+        },
+      },
+    } as unknown as ProcessRule
+
+    renderHook(() => useIndexingEstimate({
+      ...defaultOptions,
+      currentDocForm: ChunkingMode.qa,
+      processRule,
+    }))
+
+    expect(mocks.useFetchFileIndexingEstimateForFile).toHaveBeenLastCalledWith(expect.objectContaining({
+      docForm: ChunkingMode.qa,
+      processRule,
+    }))
+  })
   describe('fetchEstimate', () => {
     it('should call file mutate for FILE type', () => {
       const { result } = renderHook(() => useIndexingEstimate(defaultOptions))

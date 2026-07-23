@@ -17,7 +17,7 @@ import { ChunkingMode } from '@/models/datasets'
 import SettingCog from '../../assets/setting-gear-mod.svg'
 import s from '../index.module.css'
 import LanguageSelect from '../language-select'
-import { DelimiterInput, MaxLengthInput, OverlapInput } from './inputs'
+import { DelimiterInput, MaxLengthInput, OverlapInput, QAGenerationMaxTokensInput } from './inputs'
 import { OptionCard } from './option-card'
 
 type TextLabelProps = {
@@ -33,6 +33,7 @@ type GeneralChunkingOptionsProps = {
   segmentIdentifier: string
   maxChunkLength: number
   overlap: number
+  qaGenerationMaxTokens: number
   rules: PreProcessingRule[]
   currentDocForm: ChunkingMode
   docLanguage: string
@@ -45,6 +46,7 @@ type GeneralChunkingOptionsProps = {
   onSegmentIdentifierChange: (value: string) => void
   onMaxChunkLengthChange: (value: number) => void
   onOverlapChange: (value: number) => void
+  onQAGenerationMaxTokensChange: (value: number) => void
   onRuleToggle: (id: string) => void
   onDocFormChange: (form: ChunkingMode) => void
   onDocLanguageChange: (lang: string) => void
@@ -61,6 +63,7 @@ export const GeneralChunkingOptions: FC<GeneralChunkingOptionsProps> = ({
   segmentIdentifier,
   maxChunkLength,
   overlap,
+  qaGenerationMaxTokens,
   rules,
   currentDocForm,
   docLanguage,
@@ -71,6 +74,7 @@ export const GeneralChunkingOptions: FC<GeneralChunkingOptionsProps> = ({
   onSegmentIdentifierChange,
   onMaxChunkLengthChange,
   onOverlapChange,
+  onQAGenerationMaxTokensChange,
   onRuleToggle,
   onDocFormChange,
   onDocLanguageChange,
@@ -202,17 +206,26 @@ export const GeneralChunkingOptions: FC<GeneralChunkingOptionsProps> = ({
                   </Infotip>
                 </div>
                 {currentDocForm === ChunkingMode.qa && (
-                  <div
-                    style={{
-                      background: 'linear-gradient(92deg, rgba(247, 144, 9, 0.1) 0%, rgba(255, 255, 255, 0.00) 100%)',
-                    }}
-                    className="mt-2 flex h-10 items-center gap-2 rounded-xl border border-components-panel-border px-3 text-xs shadow-xs backdrop-blur-[5px]"
-                  >
-                    <RiAlertFill className="size-4 text-text-warning-secondary" />
-                    <span className="system-xs-medium text-text-primary">
-                      {t('stepTwo.QATip', { ns: 'datasetCreation' })}
-                    </span>
-                  </div>
+                  <>
+                    <div className="mt-2 w-1/3">
+                      <QAGenerationMaxTokensInput
+                        unit={t('stepTwo.tokens', { ns: 'datasetCreation' })}
+                        value={qaGenerationMaxTokens}
+                        onChange={onQAGenerationMaxTokensChange}
+                      />
+                    </div>
+                    <div
+                      style={{
+                        background: 'linear-gradient(92deg, rgba(247, 144, 9, 0.1) 0%, rgba(255, 255, 255, 0.00) 100%)',
+                      }}
+                      className="mt-2 flex h-10 items-center gap-2 rounded-xl border border-components-panel-border px-3 text-xs shadow-xs backdrop-blur-[5px]"
+                    >
+                      <RiAlertFill className="size-4 text-text-warning-secondary" />
+                      <span className="system-xs-medium text-text-primary">
+                        {t('stepTwo.QATip', { ns: 'datasetCreation' })}
+                      </span>
+                    </div>
+                  </>
                 )}
               </>
             )}

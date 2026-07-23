@@ -218,6 +218,7 @@ const StepTwo: FC<StepTwoProps> = ({
             segmentIdentifier={segmentation.segmentIdentifier}
             maxChunkLength={segmentation.maxChunkLength}
             overlap={segmentation.overlap}
+            qaGenerationMaxTokens={segmentation.qaGenerationMaxTokens}
             rules={segmentation.rules}
             currentDocForm={currentDocForm}
             docLanguage={docLanguage}
@@ -228,6 +229,7 @@ const StepTwo: FC<StepTwoProps> = ({
             onSegmentIdentifierChange={value => segmentation.setSegmentIdentifier(value, true)}
             onMaxChunkLengthChange={segmentation.setMaxChunkLength}
             onOverlapChange={segmentation.setOverlap}
+            onQAGenerationMaxTokensChange={segmentation.setQAGenerationMaxTokens}
             onRuleToggle={segmentation.toggleRule}
             onDocFormChange={handleDocFormChange}
             onDocLanguageChange={setDocLanguage}

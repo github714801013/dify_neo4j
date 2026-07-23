@@ -5,6 +5,7 @@ import { ChunkingMode, ProcessMode } from '@/models/datasets'
 import {
   DEFAULT_MAXIMUM_CHUNK_LENGTH,
   DEFAULT_OVERLAP,
+  DEFAULT_QA_GENERATION_MAX_TOKENS,
   DEFAULT_SEGMENT_IDENTIFIER,
   defaultParentChildConfig,
   useSegmentationState,
@@ -260,6 +261,20 @@ describe('useSegmentationState', () => {
 
       expect(result.current.parentChildConfig).toEqual(defaultParentChildConfig)
     })
+
+    it('should reset Q&A generation max tokens to its default', () => {
+      const { result } = renderHook(() => useSegmentationState())
+
+      act(() => {
+        result.current.setQAGenerationMaxTokens(1536)
+      })
+      expect(result.current.qaGenerationMaxTokens).toBe(1536)
+
+      act(() => {
+        result.current.resetToDefaults()
+      })
+      expect(result.current.qaGenerationMaxTokens).toBe(DEFAULT_QA_GENERATION_MAX_TOKENS)
+    })
   })
 
   // --- applyConfigFromRules ---
@@ -287,6 +302,38 @@ describe('useSegmentationState', () => {
       expect(result.current.maxChunkLength).toBe(800)
       expect(result.current.overlap).toBe(30)
       expect(result.current.rules).toEqual(rulesConfig.pre_processing_rules)
+    })
+
+    it('should load the Q&A generation budget from saved rules and fall back for legacy rules', () => {
+      const { result } = renderHook(() => useSegmentationState())
+      const savedRules: Rules = {
+        pre_processing_rules: [],
+        segmentation: {
+          separator: '\n\n',
+          max_tokens: 1024,
+          chunk_overlap: 50,
+        },
+        parent_mode: 'paragraph',
+        subchunk_segmentation: {
+          separator: '\n',
+          max_tokens: 512,
+        },
+        qa_generation: {
+          max_tokens: 1536,
+        },
+      }
+
+      act(() => {
+        result.current.applyConfigFromRules(savedRules, false)
+      })
+      expect(result.current.qaGenerationMaxTokens).toBe(1536)
+
+      const legacyRules = { ...savedRules }
+      delete legacyRules.qa_generation
+      act(() => {
+        result.current.applyConfigFromRules(legacyRules, false)
+      })
+      expect(result.current.qaGenerationMaxTokens).toBe(DEFAULT_QA_GENERATION_MAX_TOKENS)
     })
 
     it('should apply hierarchical config from rules', () => {
@@ -342,6 +389,20 @@ describe('useSegmentationState', () => {
 
       const rule = result.current.getProcessRule(ChunkingMode.text)
       expect(rule.summary_index_setting).toEqual(setting)
+    })
+
+    it('should include the Q&A generation budget only in the Q&A process rule', () => {
+      const { result } = renderHook(() => useSegmentationState())
+
+      act(() => {
+        result.current.setQAGenerationMaxTokens(1536)
+      })
+
+      const qaProcessRule = result.current.getProcessRule(ChunkingMode.qa)
+      const textProcessRule = result.current.getProcessRule(ChunkingMode.text)
+
+      expect(qaProcessRule.rules.qa_generation).toEqual({ max_tokens: 1536 })
+      expect(textProcessRule.rules.qa_generation).toBeUndefined()
     })
   })
 

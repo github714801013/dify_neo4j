@@ -356,7 +356,25 @@ class TestLLMGenerator:
         mock_model_instance.invoke_llm.return_value = mock_response
 
         result = LLMGenerator.generate_qa_document("tenant_id", "query", "English")
+
         assert result == "QA Document Content"
+        assert mock_model_instance.invoke_llm.call_args.kwargs["model_parameters"] == {
+            "temperature": 0.01,
+            "max_tokens": 2000,
+        }
+
+    def test_generate_qa_document_uses_custom_max_tokens(self, mock_model_instance):
+        mock_response = MagicMock(spec=LLMResult)
+        mock_response.message = MagicMock()
+        mock_response.message.get_text_content.return_value = "QA Document Content"
+        mock_model_instance.invoke_llm.return_value = mock_response
+
+        LLMGenerator.generate_qa_document("tenant_id", "query", "English", max_tokens=1536)
+
+        assert mock_model_instance.invoke_llm.call_args.kwargs["model_parameters"] == {
+            "temperature": 0.01,
+            "max_tokens": 1536,
+        }
 
     def test_generate_qa_document_type_error(self, mock_model_instance):
         mock_model_instance.invoke_llm.return_value = "Not an LLMResult"
