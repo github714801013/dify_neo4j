@@ -48,6 +48,42 @@ export type SummaryIndexSetting = {
   model_provider_name?: string
   summary_prompt?: string
 }
+export type GraphPropertyValueType = 'string' | 'number' | 'boolean' | 'date'
+
+export type GraphPropertyDefinition = {
+  name: string
+  description: string
+  value_type: GraphPropertyValueType
+  required: boolean
+}
+
+export type GraphSchemaType = {
+  name: string
+  properties: GraphPropertyDefinition[]
+}
+
+export type GraphSchemaTriple = {
+  source_type: string
+  relation_type: string
+  target_type: string
+}
+
+export type GraphIndexSchema = {
+  entity_types: GraphSchemaType[]
+  relation_types: GraphSchemaType[]
+  allowed_triples: GraphSchemaTriple[]
+}
+
+export type GraphIndexConfig = {
+  enabled: boolean
+  schema?: GraphIndexSchema
+  extract_model_config?: {
+    provider: string
+    model: string
+  }
+  graph_version?: string
+}
+
 export type KnowledgeBaseNodeType = CommonNodeType & {
   index_chunk_variable_selector: string[]
   chunk_structure?: ChunkStructureEnum
@@ -60,4 +96,5 @@ export type KnowledgeBaseNodeType = CommonNodeType & {
   _embeddingProviderModelList?: ModelItem[]
   _rerankModelList?: Model[]
   summary_index_setting?: SummaryIndexSetting
+  graph_index_config?: GraphIndexConfig
 }

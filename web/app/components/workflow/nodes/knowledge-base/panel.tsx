@@ -25,6 +25,7 @@ import { consoleQuery } from '@/service/client'
 import Split from '../_base/components/split'
 import ChunkStructure from './components/chunk-structure'
 import EmbeddingModel from './components/embedding-model'
+import GraphIndexConfig from './components/graph-index-config'
 import IndexMethod from './components/index-method'
 import RetrievalSetting from './components/retrieval-setting'
 import { useConfig } from './hooks/use-config'
@@ -78,6 +79,7 @@ const Panel: FC<NodePanelProps<KnowledgeBaseNodeType>> = ({
     handleScoreThresholdEnabledChange,
     handleInputVariableChange,
     handleSummaryIndexSettingChange,
+    handleGraphIndexConfigChange,
   } = useConfig(id)
 
   const filterVar = useCallback((variable: Var) => {
@@ -237,6 +239,14 @@ const Panel: FC<NodePanelProps<KnowledgeBaseNodeType>> = ({
                     />
                   )
                 }
+                <div className="pt-1">
+                  <Split className="h-px" />
+                </div>
+                <GraphIndexConfig
+                  config={data.graph_index_config}
+                  onChange={handleGraphIndexConfigChange}
+                  readonly={nodesReadOnly}
+                />
                 <div className="pt-1">
                   <Split className="h-px" />
                 </div>

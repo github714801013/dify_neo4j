@@ -10,6 +10,8 @@ const mockUseQuery = vi.hoisted(() => vi.fn())
 const mockUseEmbeddingModelStatus = vi.hoisted(() => vi.fn())
 const mockChunkStructure = vi.hoisted(() => vi.fn(() => <div data-testid="chunk-structure" />))
 const mockEmbeddingModel = vi.hoisted(() => vi.fn(() => <div data-testid="embedding-model" />))
+const mockGraphIndexConfig = vi.hoisted(() => vi.fn(() => <div data-testid="graph-index-config" />))
+const mockHandleGraphIndexConfigChange = vi.hoisted(() => vi.fn())
 const mockSummaryIndexSetting = vi.hoisted(() => vi.fn(() => <div data-testid="summary-index-setting" />))
 const mockQueryOptions = vi.hoisted(() => vi.fn((options: unknown) => options))
 
@@ -59,6 +61,7 @@ vi.mock('../hooks/use-config', () => ({
     handleScoreThresholdEnabledChange: vi.fn(),
     handleInputVariableChange: vi.fn(),
     handleSummaryIndexSettingChange: vi.fn(),
+    handleGraphIndexConfigChange: mockHandleGraphIndexConfigChange,
   }),
 }))
 
@@ -102,6 +105,10 @@ vi.mock('@/app/components/datasets/settings/summary-index-setting', () => ({
 
 vi.mock('../components/chunk-structure', () => ({
   default: mockChunkStructure,
+}))
+
+vi.mock('../components/graph-index-config', () => ({
+  default: mockGraphIndexConfig,
 }))
 
 vi.mock('../components/index-method', () => ({
@@ -202,5 +209,16 @@ describe('KnowledgeBasePanel', () => {
     expect(mockQueryOptions).toHaveBeenCalledWith(expect.objectContaining({
       enabled: false,
     }))
+  })
+  it('should pass graph index config and its update handler to the graph index editor', () => {
+    const graphIndexConfig = { enabled: false }
+
+    render(<Panel id="knowledge-base-1" data={createData({ graph_index_config: graphIndexConfig }) as never} panelProps={panelProps} />)
+
+    expect(mockGraphIndexConfig).toHaveBeenCalledWith(expect.objectContaining({
+      config: graphIndexConfig,
+      onChange: mockHandleGraphIndexConfigChange,
+      readonly: false,
+    }), undefined)
   })
 })

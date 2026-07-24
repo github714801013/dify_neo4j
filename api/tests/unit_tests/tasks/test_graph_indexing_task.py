@@ -26,6 +26,7 @@ class TestGraphIndexingTask:
             document_id="document-1",
             graph_version="v1",
             source_version="source-v1",
+            index_node_id="knowledge-node-1",
         )
         outcome = GraphIndexOutcome.succeeded()
         events: list[str] = []
@@ -89,6 +90,7 @@ class TestGraphIndexingTask:
             document_id="document-1",
             graph_version="v1",
             source_version="source-v1",
+            index_node_id="knowledge-node-1",
         )
         repository = MagicMock()
         repository.claim.return_value = claimed_job
@@ -228,8 +230,8 @@ class TestGraphReconcileTask:
         from schedule import graph_reconcile_task as module
 
         commands = (
-            GraphDatasetCleanupCommand("tenant-1", "dataset-1", ("doc-1",), ("segment-1",)),
-            GraphDatasetCleanupCommand("tenant-1", "dataset-2", ("doc-2",), ("segment-2",)),
+            GraphDatasetCleanupCommand("tenant-1", "dataset-1", "node-1", ("doc-1",), ("segment-1",)),
+            GraphDatasetCleanupCommand("tenant-1", "dataset-2", "node-2", ("doc-2",), ("segment-2",)),
         )
         plan = GraphReconcilePlan(job_ids=(), cleanup_commands=commands)
         reconcile = MagicMock(side_effect=[RuntimeError("boom"), None])
@@ -238,6 +240,8 @@ class TestGraphReconcileTask:
             module._reconcile_graph_data(plan)
 
         assert reconcile.call_count == 2
+        assert reconcile.call_args_list[0].kwargs["index_node_id"] == "node-1"
+        assert reconcile.call_args_list[1].kwargs["index_node_id"] == "node-2"
 
     def test_dispatch_failure_does_not_stop_remaining_jobs(self):
         from schedule import graph_reconcile_task as module

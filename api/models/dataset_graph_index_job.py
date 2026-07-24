@@ -6,8 +6,9 @@
 不变量
 ======
 
-- 唯一键 `(dataset_id, document_id, source_version, graph_version)` 保证同一
-  文档同一内容版本同一图版本只存在一个 Job，Reconciler 多次扫描幂等。
+- 唯一键 `(dataset_id, document_id, index_node_id, source_version, graph_version)`
+  保证同一文档、图谱 scope、内容版本和图版本只存在一个 Job，Reconciler 多次
+  扫描幂等。
 - `tenant_id` 与 `dataset_id`/`document_id` 一同存储，便于按租户隔离查询，
   避免跨租户扫描。
 - Phase 2 不在此模型中记录 Graph 抽取产物，Phase 3 通过 Adapter 写入图数据库，
@@ -19,7 +20,7 @@ from datetime import datetime
 import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.rag.graph_indexing.entities import GraphIndexJobStatus
+from core.rag.graph_indexing.entities import DATASET_GRAPH_INDEX_SCOPE, GraphIndexJobStatus
 from libs.datetime_utils import naive_utc_now
 
 from .base import DefaultFieldsDCMixin, TypeBase
@@ -35,12 +36,14 @@ class DatasetGraphIndexJob(DefaultFieldsDCMixin, TypeBase):
         sa.UniqueConstraint(
             "dataset_id",
             "document_id",
+            "index_node_id",
             "source_version",
             "graph_version",
             name="dataset_graph_index_job_unique",
         ),
         sa.Index("dataset_graph_index_job_status_available_idx", "status", "available_at"),
         sa.Index("dataset_graph_index_job_dataset_document_idx", "dataset_id", "document_id"),
+        sa.Index("dataset_graph_index_job_scope_idx", "dataset_id", "index_node_id"),
         sa.Index("dataset_graph_index_job_tenant_idx", "tenant_id"),
     )
 
@@ -49,6 +52,12 @@ class DatasetGraphIndexJob(DefaultFieldsDCMixin, TypeBase):
     document_id: Mapped[str] = mapped_column(StringUUID, nullable=False)
     source_version: Mapped[str] = mapped_column(sa.String(128), nullable=False)
     graph_version: Mapped[str] = mapped_column(sa.String(64), nullable=False)
+    index_node_id: Mapped[str] = mapped_column(
+        sa.String(255),
+        nullable=False,
+        default=DATASET_GRAPH_INDEX_SCOPE,
+        server_default=sa.text("'__dataset__'"),
+    )
     status: Mapped[GraphIndexJobStatus] = mapped_column(
         EnumText(GraphIndexJobStatus, length=32),
         nullable=False,

@@ -22,6 +22,10 @@ GRAPH_RECONCILE_BATCH_SIZE = 100
 # 恢复，该阈值决定多久未心跳的 running Job 视为 stale。
 GRAPH_INDEX_STALE_MINUTES = 30
 
+# 数据集级 GraphRAG 兼容路径的显式 scope。节点图谱任务使用实际
+# Knowledge Base 节点 ID；两者都写入 Job 和 Neo4j 身份，禁止相互清理。
+DATASET_GRAPH_INDEX_SCOPE = "__dataset__"
+
 
 class GraphIndexJobStatus(StrEnum):
     """Graph Index Job 的状态机取值。"""
@@ -80,6 +84,7 @@ def resumable_statuses() -> frozenset[GraphIndexJobStatus]:
 
 
 __all__ = (
+    "DATASET_GRAPH_INDEX_SCOPE",
     "GRAPH_INDEX_STALE_MINUTES",
     "GRAPH_RECONCILE_BATCH_SIZE",
     "GraphIndexJobStatus",

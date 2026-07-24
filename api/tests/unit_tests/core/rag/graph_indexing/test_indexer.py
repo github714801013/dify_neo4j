@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.rag.graph.entities import GraphExtractModelConfig, GraphSchema
-from core.rag.graph_indexing.entities import GraphIndexJobStatus
+from core.rag.graph.entities import GraphExtractModelConfig, GraphPropertyDefinition, GraphSchema
+from core.rag.graph_indexing.entities import DATASET_GRAPH_INDEX_SCOPE, GraphIndexJobStatus
 from core.rag.graph_indexing.extractor import ExtractionResult, GraphExtractionError
 from core.rag.graph_indexing.indexer import GraphIndexJobRequest, run_indexer
 from core.rag.graph_indexing.neo4j_writer import GraphWriteError
@@ -119,6 +119,42 @@ def test_load_index_input_scopes_segments_by_tenant_dataset_and_document():
     assert "document_segments.document_id" in segment_statement
 
 
+def test_load_index_input_includes_entity_properties_for_published_node_scope():
+    from core.rag.graph_indexing import indexer as module
+
+    property_definition = GraphPropertyDefinition(
+        name="display_name",
+        description="产品名称",
+        value_type="string",
+        required=True,
+    )
+    graph_config = SimpleNamespace(
+        schema=SimpleNamespace(
+            entity_types=[SimpleNamespace(name="PRODUCT", properties=[property_definition])],
+            relation_types=[SimpleNamespace(name="CONTAINS", properties=[])],
+            allowed_triples=[SimpleNamespace(as_tuple=lambda: ("PRODUCT", "CONTAINS", "PRODUCT"))],
+        ),
+        extract_model_config=GraphExtractModelConfig(provider="provider", model="model"),
+    )
+    node_scope = SimpleNamespace(graph_version="v1", graph_config=graph_config)
+    session = MagicMock()
+    session.__enter__.return_value = session
+    scalar_result = MagicMock()
+    scalar_result.all.return_value = []
+    session.scalars.return_value = scalar_result
+
+    with (
+        patch.object(module, "Session", return_value=session),
+        patch.object(module, "db", SimpleNamespace(engine=object())),
+        patch.object(module, "resolve_published_node_graph_scope", return_value=node_scope),
+        patch.object(module, "list_published_node_graph_scopes", return_value=[]),
+    ):
+        result = module._load_index_input(replace(_job(), index_node_id="knowledge-node-1"))
+
+    assert result is not None
+    assert result.schema.entity_properties == {"PRODUCT": [property_definition]}
+
+
 def test_stale_source_before_writing_discards_partial_graph_and_cancels():
     from core.rag.graph_indexing import indexer as module
 
@@ -138,6 +174,7 @@ def test_stale_source_before_writing_discards_partial_graph_and_cancels():
         document_id="document-1",
         graph_version="v1",
         source_version="source-v2",
+        index_node_id=DATASET_GRAPH_INDEX_SCOPE,
     )
 
 
@@ -196,12 +233,14 @@ def test_success_initializes_schema_writes_segments_then_finalizes_version():
     assert extract.call_args.kwargs["strict"] is False
     assert extract.call_args.kwargs["max_triplets_per_chunk"] == 7
     assert write.call_args.kwargs["source_version"] == "source-v2"
+    assert write.call_args.kwargs["index_node_id"] == DATASET_GRAPH_INDEX_SCOPE
     finalize.assert_called_once_with(
         tenant_id="tenant-1",
         dataset_id="dataset-1",
         document_id="document-1",
         graph_version="v1",
         source_version="source-v2",
+        index_node_id=DATASET_GRAPH_INDEX_SCOPE,
     )
 
 
@@ -290,3 +329,20 @@ def test_finalize_failure_is_retryable():
 
     assert outcome.status == GraphIndexJobStatus.RETRY_WAITING
     assert outcome.error_code == "graph_indexer_write_failed"
+
+
+def test_inactive_node_scope_is_cancelled_without_discarding_existing_graph():
+    from core.rag.graph_indexing import indexer as module
+
+    node_job = replace(_job(), index_node_id="node-a")
+    with (
+        patch.object(module, "_is_node_scope_current", return_value=False),
+        patch.object(module, "discard_document_version") as discard,
+        patch.object(module, "_load_index_input") as load_index_input,
+    ):
+        outcome = run_indexer(node_job)
+
+    assert outcome.status == GraphIndexJobStatus.CANCELLED
+    assert outcome.error_code == "graph_indexer_node_scope_inactive"
+    discard.assert_not_called()
+    load_index_input.assert_not_called()

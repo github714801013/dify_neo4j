@@ -17,7 +17,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 
+from core.rag.graph_indexing.entities import DATASET_GRAPH_INDEX_SCOPE
 from core.rag.graph_indexing.repositories import GraphIndexJobRepository
 from core.rag.graph_indexing.versioning import (
     build_segment_source_facts,
@@ -42,6 +44,8 @@ class GraphIndexJobCoordinator:
         dataset_id: str,
         document: Document,
         graph_version: str,
+        index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
+        excluded_index_node_ids: Collection[str] = (),
     ) -> str | None:
         """为单个 Document 幂等创建 Job。
 
@@ -59,6 +63,8 @@ class GraphIndexJobCoordinator:
             tenant_id=tenant_id,
             dataset_id=dataset_id,
             document_id=document.id,
+            index_node_id=index_node_id,
+            excluded_index_node_ids=excluded_index_node_ids,
         )
         segment_facts = [
             build_segment_source_facts(
@@ -75,14 +81,16 @@ class GraphIndexJobCoordinator:
             document_id=document.id,
             source_version=source_version,
             graph_version=graph_version,
+            index_node_id=index_node_id,
         )
         if job is None:
             return None
         logger.info(
-            "graph_index_job created tenant=%s dataset=%s document=%s job=%s",
+            "graph_index_job created tenant=%s dataset=%s document=%s scope=%s job=%s",
             tenant_id,
             dataset_id,
             document.id,
+            index_node_id,
             job.id,
         )
         return job.id

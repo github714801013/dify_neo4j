@@ -1,12 +1,25 @@
 # Dify GraphRAG Phase 1 原始需求
 
-Last Updated: 2026-07-19
+Last Updated: 2026-07-23
 
 ## 来源与状态源
 
 - 来源计划：`D:\Downloads\dify-graphrag-minimal-invasive-fork-development-guide.md`。
-- 本文件与 `docs/engineering/plans/2026-07-16-graphrag-plan.md` 是本轮唯一状态源。
+- 本文件、`docs/engineering/plans/2026-07-16-graphrag-plan.md` 与 `docs/engineering/specs/2026-07-23-knowledge-base-graph-attribute-config-spec.md` 是本轮状态源。
 - 用户要求：分析计划、生成可落地文档并实施。
+
+## 新需求阶段交接（2026-07-23）
+
+- `stage_status`: `completed`
+- `current_skill`: `to-tickets`
+- `next_skill`: `implementation`
+- `resume_from`: 本节、`docs/engineering/specs/2026-07-23-knowledge-base-graph-attribute-config-spec.md`、`docs/engineering/specs/2026-07-16-graphrag-raw-requirements.md` 与既有 GraphRAG 实施计划。
+- `continuation_mode`: `manual`
+- `confirmed_at`: `2026-07-23`
+- `handoff_summary`: 用户已于 2026-07-23 手动启动 `grill-with-docs`，并确认“图谱属性配置”指图谱索引时实体与关系要提取并写入 Neo4j 的属性字段；配置以 Pipeline Knowledge Base 节点 DSL 为权威来源，仅作用于经过该节点处理的文档，且不与既有数据集级 GraphRAG 配置合并或互相覆盖。节点 DSL 保存完整图谱 Schema：实体类型、关系类型、允许三元组，以及各实体类型和关系类型对应的属性定义。属性按实体类型和关系类型分别配置，定义为类型内唯一的 `name`、LLM 提取用 `description`、`value_type`（仅 `string`、`number`、`boolean`、`date`）与默认 `false` 的 `required`；属性值只允许单值标量，不支持数组、对象和嵌套结构。兼容语义采用显式优先、缺失回退：节点存在 `graph_index_config` 时它是唯一执行配置；节点缺失该配置时保留既有数据集级行为；节点显式 `enabled=false` 时禁用本次图谱索引；不自动复制或回写数据集级配置。节点级启用的图谱配置必须自带 `extract_model_config`，仅保存租户已配置模型的非敏感 provider/model 等引用，不保存密钥，并复用现有模型可用性校验。用户进一步确认 Knowledge Base 节点仅承载图谱索引/抽取配置（`enabled`、`graph_version`、完整 Schema/属性定义、`extract_model_config`），不承载 `query_mode`、`graph_top_k`、`graph_max_depth`、`graph_timeout_ms`、`graph_weight` 等检索运行时调优参数；本次确认明确正式字段名为 `graph_index_config`，不支持 `graph_rag_config` 别名。用户还确认：LLM 未抽取到某实体或关系声明为 `required=true` 的属性时，仅跳过该实体或关系记录，不使整个 Segment 或图索引任务失败；同 Segment 内其他满足 Schema 的记录继续写入 Neo4j，`required` 表示该记录可写入图谱的必要条件。关系属性的 Neo4j 承载对象已确认：实体属性写入 `GraphEntity` 节点，关系属性写入对应的 `GraphFact` 节点；不新增实体到实体的动态 Neo4j 关系类型，以沿用既有版本隔离、文档范围、Segment 证据链与事实唯一键。`graph_version` 已确认由系统根据影响抽取结果的节点级图谱索引配置生成稳定指纹，前端不提供人工编辑入口；Schema、属性定义、抽取模型或其他影响抽取结果的配置变化会产生新版本。新版本触发的历史文档处理已确认：保存 Pipeline DSL 不同步扫描或大量投递任务；Reconciler 异步、分批识别实际经过该 Knowledge Base 节点的已完成文档，并按新的 `graph_version` 创建重建任务。节点 DSL 的正式字段名已确认使用 `graph_index_config`；不新增 `graph_rag_config` 兼容别名，因为该节点只负责图谱索引/抽取且当前不存在此字段的历史 DSL。属性 `name` 命名已确认：使用 1–64 位小写 ASCII `snake_case`，首字符必须为字母、后续仅可包含字母/数字/下划线；`description` 可使用自然语言；名称在所属实体类型或关系类型内唯一。`value_type=date` 已确认仅接受 ISO 日历日期 `YYYY-MM-DD`，写入 Neo4j 原生 `date` 属性；不支持时间、时区或日期时间，未来如需另增 `datetime` 类型。用户定义的逻辑属性名在 DSL 与 LLM 抽取 JSON 中保持原样，写入 Neo4j 时统一映射为 `attr_<name>`，以隔离并保护现有系统范围、版本、证据和时间戳字段。同一 `GraphEntity` 或 `GraphFact` 对同一属性出现多个不同的合法值时，已确认不写入该属性值，但不使 Segment 或图索引任务失败；记录结构化告警，避免最后写入覆盖或任意选择一个可能错误的标量值。LLM 抽取结果的属性 JSON 已确认使用嵌套 `properties` 对象：实体项为 `name`、`type`、`properties`，关系项为源/目标/关系固有字段与 `properties`；仅接受当前实体或关系类型已声明的属性，未声明属性直接丢弃且不使索引任务失败。`graph_index_config.schema` 已确认采用类型定义对象列表：`entity_types` 与 `relation_types` 的每项均含 `name` 和 `properties`，`allowed_triples` 使用 `source_type`、`relation_type`、`target_type` 命名字段，不采用平行属性映射或位置元组。属性值采用严格类型校验，不进行字符串隐式转换：`string` 为非空字符串，`number` 为有限 JSON 数值，`boolean` 为 JSON 布尔值，`date` 为 `YYYY-MM-DD`；类型不匹配、空字符串或非法日期均按未抽取到处理，可选属性丢弃、必填属性跳过对应实体或关系，均不使整体任务失败。`enabled=false` 仅停止该节点后续文档处理时的图谱抽取和写入，保留 DSL 内既有 Schema、属性定义与模型配置，不删除已有 Neo4j 图数据；重新启用后继续使用保留的有效配置，并遵从已确认的版本和历史文档重建策略。禁用状态允许最小 `graph_index_config`：`{ "enabled": false }`；启用时必须具备完整有效的 `schema` 与 `extract_model_config`；禁用状态已提供的 Schema 或模型配置仍需通过完整校验，不能保存半截或无效配置。图谱抽取、插件或 Neo4j 写入失败已确认完全隔离：文本分块、普通向量索引与节点正常输出继续成功；图谱任务单独重试或失败并保留错误原因，绝不导致文本分块为空或普通索引失败。`grill-with-docs` 与 `to-spec` 已完成，待决问题为空；当前等待用户手动执行 `to-tickets` 拆分本地 `ready-for-agent` tickets。
+- `evidence`: 当前 Workflow 节点前端实现位于 `web/app/components/workflow/nodes/knowledge-base/`；图谱领域与索引/检索实现位于 `api/core/rag/graph_indexing/`、`api/core/rag/graph_retrieval/`。本轮正式规格已发布至 `docs/engineering/specs/2026-07-23-knowledge-base-graph-attribute-config-spec.md`；规格与本状态源均已通过空白检查。尚未修改业务源码、未拆分 ticket。
+- `required_action`: `to-spec` 已由用户于 2026-07-23 手动执行并完成；下一步等待用户手动执行 `$to-tickets`，以创建本地 `ready-for-agent` tickets。
+
 
 ## 实现状态校正（2026-07-19）
 

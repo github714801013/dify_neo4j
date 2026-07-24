@@ -23,15 +23,17 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import timedelta
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from core.rag.graph_indexing.entities import (
+    DATASET_GRAPH_INDEX_SCOPE,
     GraphIndexJobStatus,
     claimable_statuses,
     resumable_statuses,
@@ -41,6 +43,7 @@ from core.rag.graph_indexing.errors import (
     GraphIndexJobConflictError,
     GraphIndexJobNotFoundError,
 )
+from core.rag.graph_indexing.scopes import list_published_node_graph_scopes
 from libs.datetime_utils import naive_utc_now
 from models.dataset import Document, DocumentSegment
 from models.dataset_graph_config import DatasetGraphConfig
@@ -53,6 +56,11 @@ logger = logging.getLogger(__name__)
 class GraphIndexJobRepository(Protocol):
     """Graph Index Job 仓储协议。"""
 
+    @property
+    def session(self) -> Session:
+        """暴露调用方需要的数据库会话。"""
+        ...
+
     def create_if_missing(
         self,
         *,
@@ -61,6 +69,7 @@ class GraphIndexJobRepository(Protocol):
         document_id: str,
         source_version: str,
         graph_version: str,
+        index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
     ) -> DatasetGraphIndexJob | None:
         """幂等创建 Job。若唯一键已存在则返回 None，否则返回新建的 Job。"""
         ...
@@ -82,6 +91,8 @@ class GraphIndexJobRepository(Protocol):
         dataset_id: str,
         limit: int,
         offset: int,
+        index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
+        excluded_index_node_ids: Collection[str] = (),
     ) -> Sequence[Document]:
         """列出 completed 且未归档的 Document。"""
         ...
@@ -92,6 +103,8 @@ class GraphIndexJobRepository(Protocol):
         tenant_id: str,
         dataset_id: str,
         document_id: str,
+        index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
+        excluded_index_node_ids: Collection[str] = (),
     ) -> Sequence[DocumentSegment]:
         """列出参与当前图版本计算和写入的有效 Segment。"""
         ...
@@ -100,7 +113,14 @@ class GraphIndexJobRepository(Protocol):
         """列出 Dataset 当前仍有效的 Document ID。"""
         ...
 
-    def list_active_segment_ids(self, *, tenant_id: str, dataset_id: str) -> Sequence[str]:
+    def list_active_segment_ids(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
+        excluded_index_node_ids: Collection[str] = (),
+    ) -> Sequence[str]:
         """列出 Dataset 当前仍有效的 Segment ID。"""
         ...
 
@@ -180,6 +200,7 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
         document_id: str,
         source_version: str,
         graph_version: str,
+        index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
     ) -> DatasetGraphIndexJob | None:
         existing = self._session.scalar(
             select(DatasetGraphIndexJob)
@@ -187,6 +208,7 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
                 DatasetGraphIndexJob.tenant_id == tenant_id,
                 DatasetGraphIndexJob.dataset_id == dataset_id,
                 DatasetGraphIndexJob.document_id == document_id,
+                DatasetGraphIndexJob.index_node_id == index_node_id,
                 DatasetGraphIndexJob.source_version == source_version,
                 DatasetGraphIndexJob.graph_version == graph_version,
             )
@@ -205,6 +227,7 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
             tenant_id=tenant_id,
             dataset_id=dataset_id,
             document_id=document_id,
+            index_node_id=index_node_id,
             source_version=source_version,
             graph_version=graph_version,
             status=GraphIndexJobStatus.PENDING,
@@ -222,6 +245,7 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
                     DatasetGraphIndexJob.tenant_id == tenant_id,
                     DatasetGraphIndexJob.dataset_id == dataset_id,
                     DatasetGraphIndexJob.document_id == document_id,
+                    DatasetGraphIndexJob.index_node_id == index_node_id,
                     DatasetGraphIndexJob.source_version == source_version,
                     DatasetGraphIndexJob.graph_version == graph_version,
                 )
@@ -260,7 +284,13 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
         dataset_id: str,
         limit: int,
         offset: int,
+        index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
+        excluded_index_node_ids: Collection[str] = (),
     ) -> Sequence[Document]:
+        segment_scope = _segment_scope_predicate(
+            index_node_id=index_node_id,
+            excluded_index_node_ids=excluded_index_node_ids,
+        )
         stmt = (
             select(Document)
             .where(
@@ -270,6 +300,16 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
                 Document.archived.is_(False),
                 Document.indexing_status == "completed",
                 Document.completed_at.is_not(None),
+                exists(
+                    select(DocumentSegment.id).where(
+                        DocumentSegment.tenant_id == tenant_id,
+                        DocumentSegment.dataset_id == dataset_id,
+                        DocumentSegment.document_id == Document.id,
+                        DocumentSegment.enabled.is_(True),
+                        DocumentSegment.status == SegmentStatus.COMPLETED,
+                        segment_scope,
+                    )
+                ),
             )
             .order_by(Document.created_at)
             .limit(limit)
@@ -283,7 +323,13 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
         tenant_id: str,
         dataset_id: str,
         document_id: str,
+        index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
+        excluded_index_node_ids: Collection[str] = (),
     ) -> Sequence[DocumentSegment]:
+        segment_scope = _segment_scope_predicate(
+            index_node_id=index_node_id,
+            excluded_index_node_ids=excluded_index_node_ids,
+        )
         return self._session.scalars(
             select(DocumentSegment)
             .where(
@@ -292,6 +338,7 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
                 DocumentSegment.document_id == document_id,
                 DocumentSegment.enabled.is_(True),
                 DocumentSegment.status == SegmentStatus.COMPLETED,
+                segment_scope,
             )
             .order_by(DocumentSegment.position, DocumentSegment.id)
         ).all()
@@ -308,7 +355,18 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
             )
         ).all()
 
-    def list_active_segment_ids(self, *, tenant_id: str, dataset_id: str) -> Sequence[str]:
+    def list_active_segment_ids(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
+        excluded_index_node_ids: Collection[str] = (),
+    ) -> Sequence[str]:
+        segment_scope = _segment_scope_predicate(
+            index_node_id=index_node_id,
+            excluded_index_node_ids=excluded_index_node_ids,
+        )
         return self._session.scalars(
             select(DocumentSegment.id)
             .join(Document, Document.id == DocumentSegment.document_id)
@@ -317,6 +375,7 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
                 DocumentSegment.dataset_id == dataset_id,
                 DocumentSegment.enabled.is_(True),
                 DocumentSegment.status == SegmentStatus.COMPLETED,
+                segment_scope,
                 Document.tenant_id == tenant_id,
                 Document.dataset_id == dataset_id,
                 Document.enabled.is_(True),
@@ -347,7 +406,7 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
 
     def list_dispatchable_jobs(self, *, limit: int) -> Sequence[DatasetGraphIndexJob]:
         now = naive_utc_now()
-        return self._session.scalars(
+        dataset_jobs = self._session.scalars(
             select(DatasetGraphIndexJob)
             .join(
                 DatasetGraphConfig,
@@ -357,12 +416,39 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
             .where(
                 DatasetGraphIndexJob.status == GraphIndexJobStatus.PENDING,
                 DatasetGraphIndexJob.available_at <= now,
+                DatasetGraphIndexJob.index_node_id == DATASET_GRAPH_INDEX_SCOPE,
                 DatasetGraphConfig.enabled.is_(True),
                 DatasetGraphConfig.graph_version == DatasetGraphIndexJob.graph_version,
             )
             .order_by(DatasetGraphIndexJob.available_at, DatasetGraphIndexJob.created_at)
             .limit(limit)
         ).all()
+        node_jobs = self._session.scalars(
+            select(DatasetGraphIndexJob)
+            .where(
+                DatasetGraphIndexJob.status == GraphIndexJobStatus.PENDING,
+                DatasetGraphIndexJob.available_at <= now,
+                DatasetGraphIndexJob.index_node_id != DATASET_GRAPH_INDEX_SCOPE,
+            )
+            .order_by(DatasetGraphIndexJob.available_at, DatasetGraphIndexJob.created_at)
+            .limit(limit)
+        ).all()
+        if not node_jobs:
+            return dataset_jobs
+
+        enabled_node_scopes = {
+            (scope.tenant_id, scope.dataset_id, scope.index_node_id): scope.graph_version
+            for scope in list_published_node_graph_scopes(self._session)
+        }
+        dispatchable_node_jobs = [
+            job
+            for job in node_jobs
+            if enabled_node_scopes.get((job.tenant_id, job.dataset_id, job.index_node_id)) == job.graph_version
+        ]
+        return sorted(
+            [*dataset_jobs, *dispatchable_node_jobs],
+            key=lambda job: (job.available_at, job.created_at),
+        )[:limit]
 
     def get(self, job_id: str) -> DatasetGraphIndexJob | None:
         return self._session.get(DatasetGraphIndexJob, job_id)
@@ -500,6 +586,19 @@ class SqlAlchemyGraphIndexJobRepository(GraphIndexJobRepository):
                 code="graph_index_job_not_running",
             )
         return job
+
+
+def _segment_scope_predicate(
+    *, index_node_id: str, excluded_index_node_ids: Collection[str]
+) -> ColumnElement[bool]:
+    if index_node_id != DATASET_GRAPH_INDEX_SCOPE:
+        return DocumentSegment.index_node_id == index_node_id
+    if excluded_index_node_ids:
+        return or_(
+            DocumentSegment.index_node_id.is_(None),
+            DocumentSegment.index_node_id.not_in(excluded_index_node_ids),
+        )
+    return true()
 
 
 __all__ = ["GraphIndexJobRepository", "SqlAlchemyGraphIndexJobRepository"]

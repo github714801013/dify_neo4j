@@ -1,4 +1,4 @@
-import type { KnowledgeBaseNodeType } from '../../types'
+import type { GraphIndexConfig, KnowledgeBaseNodeType } from '../../types'
 import { act } from '@testing-library/react'
 import {
   createNode,
@@ -507,6 +507,21 @@ describe('useConfig', () => {
           enable: true,
           summary_prompt: 'existing prompt',
         },
+      },
+    })
+  })
+  it('should update only the graph index config', () => {
+    const { result } = renderConfigHook(createNodeData())
+    const graphIndexConfig: GraphIndexConfig = { enabled: false }
+
+    act(() => {
+      result.current.handleGraphIndexConfigChange(graphIndexConfig)
+    })
+
+    expect(mockHandleNodeDataUpdateWithSyncDraft).toHaveBeenLastCalledWith({
+      id: 'knowledge-base-node',
+      data: {
+        graph_index_config: graphIndexConfig,
       },
     })
   })

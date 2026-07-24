@@ -7,8 +7,10 @@ import pytest
 from core.rag.graph_indexing.coordinator import GraphIndexJobCoordinator
 from core.rag.graph_indexing.reconciler import GraphIndexReconciler
 from core.rag.graph_indexing.repositories import SqlAlchemyGraphIndexJobRepository
+from core.rag.graph_indexing.scopes import PublishedNodeGraphScope
+from core.workflow.nodes.knowledge_index.entities import GraphIndexConfig
 from libs.datetime_utils import naive_utc_now
-from models.dataset import Document, DocumentSegment
+from models.dataset import Document, DocumentSegment, SegmentStatus
 from models.dataset_graph_config import DatasetGraphConfig
 from models.dataset_graph_index_job import DatasetGraphIndexJob
 
@@ -49,6 +51,14 @@ def reconciler(repository, coordinator):
     return GraphIndexReconciler(repository=repository, coordinator=coordinator)
 
 
+@pytest.fixture(autouse=True)
+def _no_published_node_graph_scopes_by_default(monkeypatch):
+    monkeypatch.setattr(
+        "core.rag.graph_indexing.reconciler.list_published_node_graph_scopes",
+        lambda _session: [],
+    )
+
+
 def _make_config(*, tenant_id, dataset_id, graph_version="v1", enabled=True) -> DatasetGraphConfig:
     return DatasetGraphConfig(
         tenant_id=tenant_id,
@@ -73,6 +83,21 @@ def _make_document(*, tenant_id, dataset_id, batch="b1", word_count=10, complete
         word_count=word_count,
         updated_at=naive_utc_now(),
         archived=archived,
+    )
+
+
+def _make_segment(*, tenant_id, dataset_id, document_id) -> DocumentSegment:
+    return DocumentSegment(
+        tenant_id=tenant_id,
+        dataset_id=dataset_id,
+        document_id=document_id,
+        position=0,
+        content="segment",
+        word_count=1,
+        tokens=1,
+        created_by=str(uuid4()),
+        status=SegmentStatus.COMPLETED,
+        completed_at=naive_utc_now(),
     )
 
 
@@ -164,6 +189,8 @@ class TestReconcilerEnabledFlag:
         doc_disabled = _make_document(tenant_id=tenant_id, dataset_id=disabled.dataset_id)
         db_session.add_all([doc_enabled, doc_disabled])
         db_session.flush()
+        db_session.add(_make_segment(tenant_id=tenant_id, dataset_id=enabled.dataset_id, document_id=doc_enabled.id))
+        db_session.flush()
 
         dispatchable = reconciler.reconcile()
         jobs = db_session.query(DatasetGraphIndexJob).all()
@@ -182,6 +209,8 @@ class TestReconcilerEnabledFlag:
         archived = _make_document(tenant_id=tenant_id, dataset_id=dataset_id, completed=True, archived=True)
         db_session.add_all([completed, indexing, archived])
         db_session.flush()
+        db_session.add(_make_segment(tenant_id=tenant_id, dataset_id=dataset_id, document_id=completed.id))
+        db_session.flush()
 
         dispatchable = reconciler.reconcile()
         jobs = db_session.query(DatasetGraphIndexJob).all()
@@ -195,6 +224,8 @@ class TestReconcilerEnabledFlag:
         db_session.add(config)
         doc = _make_document(tenant_id=tenant_id, dataset_id=dataset_id)
         db_session.add(doc)
+        db_session.flush()
+        db_session.add(_make_segment(tenant_id=tenant_id, dataset_id=dataset_id, document_id=doc.id))
         db_session.flush()
 
         first_dispatch = reconciler.reconcile()
@@ -214,6 +245,11 @@ class TestReconcilerEnabledFlag:
         doc_a = _make_document(tenant_id=tenant_a, dataset_id=dataset_a)
         doc_b = _make_document(tenant_id=tenant_b, dataset_id=dataset_b)
         db_session.add_all([doc_a, doc_b])
+        db_session.flush()
+        db_session.add_all([
+            _make_segment(tenant_id=tenant_a, dataset_id=dataset_a, document_id=doc_a.id),
+            _make_segment(tenant_id=tenant_b, dataset_id=dataset_b, document_id=doc_b.id),
+        ])
         db_session.flush()
 
         dispatchable = reconciler.reconcile()
@@ -238,8 +274,52 @@ class TestReconcilerEnabledFlag:
         docs = [_make_document(tenant_id=tenant_id, dataset_id=dataset_id) for _ in range(3)]
         db_session.add_all(docs)
         db_session.flush()
+        db_session.add_all([
+            _make_segment(tenant_id=tenant_id, dataset_id=dataset_id, document_id=document.id)
+            for document in docs
+        ])
+        db_session.flush()
 
         dispatchable = reconciler.reconcile()
         jobs = db_session.query(DatasetGraphIndexJob).all()
         assert {j.document_id for j in jobs} == {d.id for d in docs}
         assert set(dispatchable) == {job.id for job in jobs}
+
+    def test_node_scope_creates_separate_job_and_excludes_dataset_fallback(self, reconciler, db_session, monkeypatch):
+        monkeypatch.setattr(reconciler, "_is_enabled", lambda: True)
+        tenant_id, dataset_id = str(uuid4()), str(uuid4())
+        node_id = "node-a"
+        config = _make_config(tenant_id=tenant_id, dataset_id=dataset_id, graph_version="dataset-v1")
+        document = _make_document(tenant_id=tenant_id, dataset_id=dataset_id)
+        db_session.add_all([config, document])
+        db_session.flush()
+        node_segment = _make_segment(tenant_id=tenant_id, dataset_id=dataset_id, document_id=document.id)
+        node_segment.index_node_id = node_id
+        fallback_segment = _make_segment(tenant_id=tenant_id, dataset_id=dataset_id, document_id=document.id)
+        db_session.add_all([node_segment, fallback_segment])
+        db_session.flush()
+        node_scope = PublishedNodeGraphScope(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            index_node_id=node_id,
+            graph_version="node-v1",
+            graph_config=GraphIndexConfig.model_construct(enabled=True, graph_version="node-v1"),
+        )
+        monkeypatch.setattr(
+            "core.rag.graph_indexing.reconciler.list_published_node_graph_scopes",
+            lambda _session: [node_scope],
+        )
+        monkeypatch.setattr(
+            "core.rag.graph_indexing.repositories.list_published_node_graph_scopes",
+            lambda _session: [node_scope],
+        )
+
+        plan = reconciler.reconcile_plan()
+        jobs = db_session.query(DatasetGraphIndexJob).all()
+        cleanup_by_scope = {command.index_node_id: command for command in plan.cleanup_commands}
+
+        assert {job.index_node_id for job in jobs} == {"__dataset__", node_id}
+        assert {job.graph_version for job in jobs} == {"dataset-v1", "node-v1"}
+        assert set(plan.job_ids) == {job.id for job in jobs}
+        assert cleanup_by_scope[node_id].active_segment_ids == (node_segment.id,)
+        assert cleanup_by_scope["__dataset__"].active_segment_ids == (fallback_segment.id,)

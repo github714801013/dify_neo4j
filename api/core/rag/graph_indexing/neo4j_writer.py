@@ -6,7 +6,7 @@
 - 封装 Neo4j 官方 Python Driver，并按 ``dify_config.NEO4J_*`` 建立连接。
 - 使用 ``GraphEntity``、``GraphFact``、``GraphSegment`` 三类节点保存实体、事实
   和 Segment 证据；同一事实可以由多个 Segment 独立举证。
-- 所有图对象都带 tenant、Dataset、Document、graph_version、source_version
+- 所有图对象都带 tenant、Dataset、Document、节点 scope、graph_version、source_version
   隔离字段；每次 Segment 写入在单事务内替换该 Segment 的当前版本数据，避免
   LLM 重试结果变化时累积过期事实。
 - 单个 Job 全部 Segment 写入成功后，由 ``finalize_document_version`` 删除同一
@@ -30,6 +30,7 @@ from threading import Lock
 from typing import TYPE_CHECKING, Protocol
 
 from configs import dify_config
+from core.rag.graph_indexing.entities import DATASET_GRAPH_INDEX_SCOPE
 from core.rag.graph_indexing.extractor import ExtractedTriple, ExtractionResult
 
 if TYPE_CHECKING:
@@ -51,21 +52,34 @@ _schema_initialized = False
 _schema_lock = Lock()
 
 _SCHEMA_QUERIES = (
+    "MATCH (n:GraphEntity) WHERE n.index_node_id IS NULL SET n.index_node_id = '__dataset__'",
+    "MATCH (n:GraphFact) WHERE n.index_node_id IS NULL SET n.index_node_id = '__dataset__'",
+    "MATCH (n:GraphSegment) WHERE n.index_node_id IS NULL SET n.index_node_id = '__dataset__'",
+    "DROP CONSTRAINT graph_entity_identity IF EXISTS",
+    "DROP CONSTRAINT graph_fact_identity IF EXISTS",
+    "DROP CONSTRAINT graph_segment_identity IF EXISTS",
+    "DROP INDEX graph_entity_lookup IF EXISTS",
+    "DROP INDEX graph_fact_lookup IF EXISTS",
+    "DROP INDEX graph_segment_lookup IF EXISTS",
     "CREATE CONSTRAINT graph_entity_identity IF NOT EXISTS "
     "FOR (n:GraphEntity) REQUIRE "
-    "(n.tenant_id, n.dataset_id, n.document_id, n.graph_version, n.source_version, n.name, n.type) IS UNIQUE",
+    "(n.tenant_id, n.dataset_id, n.document_id, n.index_node_id, "
+    "n.graph_version, n.source_version, n.name, n.type) IS UNIQUE",
     "CREATE CONSTRAINT graph_fact_identity IF NOT EXISTS "
     "FOR (n:GraphFact) REQUIRE "
-    "(n.tenant_id, n.dataset_id, n.document_id, n.graph_version, n.source_version, n.fact_key) IS UNIQUE",
+    "(n.tenant_id, n.dataset_id, n.document_id, n.index_node_id, "
+    "n.graph_version, n.source_version, n.fact_key) IS UNIQUE",
     "CREATE CONSTRAINT graph_segment_identity IF NOT EXISTS "
     "FOR (n:GraphSegment) REQUIRE "
-    "(n.tenant_id, n.dataset_id, n.document_id, n.graph_version, n.source_version, n.id) IS UNIQUE",
+    "(n.tenant_id, n.dataset_id, n.document_id, n.index_node_id, n.graph_version, n.source_version, n.id) IS UNIQUE",
     "CREATE INDEX graph_entity_lookup IF NOT EXISTS "
-    "FOR (n:GraphEntity) ON (n.tenant_id, n.dataset_id, n.graph_version, n.source_version, n.name)",
+    "FOR (n:GraphEntity) ON (n.tenant_id, n.dataset_id, n.index_node_id, n.graph_version, n.source_version, n.name)",
     "CREATE INDEX graph_fact_lookup IF NOT EXISTS "
-    "FOR (n:GraphFact) ON (n.tenant_id, n.dataset_id, n.graph_version, n.source_version, n.relation)",
+    "FOR (n:GraphFact) ON (n.tenant_id, n.dataset_id, n.index_node_id, n.graph_version, n.source_version, n.relation)",
     "CREATE INDEX graph_segment_lookup IF NOT EXISTS "
-    "FOR (n:GraphSegment) ON (n.tenant_id, n.dataset_id, n.document_id, n.graph_version, n.source_version)",
+    "FOR (n:GraphSegment) ON "
+    "(n.tenant_id, n.dataset_id, n.document_id, n.index_node_id, "
+    "n.graph_version, n.source_version)",
 )
 
 
@@ -139,6 +153,7 @@ def write_segment(
     graph_version: str,
     source_version: str,
     extraction: ExtractionResult,
+    index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
 ) -> int:
     """把单个 Segment 的实体、事实和证据幂等写入 Neo4j。
 
@@ -160,6 +175,7 @@ def write_segment(
                 graph_version=graph_version,
                 source_version=source_version,
                 extraction=extraction,
+                index_node_id=index_node_id,
             )
     except GraphWriteError:
         raise
@@ -175,6 +191,7 @@ def discard_document_version(
     document_id: str,
     graph_version: str,
     source_version: str,
+    index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
 ) -> None:
     """删除过期 Job 为指定文档版本写入的全部临时图对象。"""
     driver = _get_driver()
@@ -187,6 +204,7 @@ def discard_document_version(
                 document_id=document_id,
                 graph_version=graph_version,
                 source_version=source_version,
+                index_node_id=index_node_id,
             )
     except GraphWriteError:
         raise
@@ -200,6 +218,7 @@ def reconcile_dataset_graph(
     dataset_id: str,
     active_document_ids: tuple[str, ...],
     active_segment_ids: tuple[str, ...],
+    index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
 ) -> None:
     """清理 Dataset 中已删除、归档、禁用或失效的图对象。
 
@@ -215,6 +234,7 @@ def reconcile_dataset_graph(
                 dataset_id=dataset_id,
                 active_document_ids=list(active_document_ids),
                 active_segment_ids=list(active_segment_ids),
+                index_node_id=index_node_id,
             )
     except GraphWriteError:
         raise
@@ -229,6 +249,7 @@ def finalize_document_version(
     document_id: str,
     graph_version: str,
     source_version: str,
+    index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
 ) -> None:
     """在新版本全部写入成功后删除同文档的旧 GraphRAG 版本。
 
@@ -245,6 +266,7 @@ def finalize_document_version(
                 document_id=document_id,
                 graph_version=graph_version,
                 source_version=source_version,
+                index_node_id=index_node_id,
             )
     except GraphWriteError:
         raise
@@ -262,6 +284,7 @@ def _write_segment_tx(
     graph_version: str,
     source_version: str,
     extraction: ExtractionResult,
+    index_node_id: str = DATASET_GRAPH_INDEX_SCOPE,
 ) -> None:
     scope = {
         "tenant_id": tenant_id,
@@ -270,41 +293,47 @@ def _write_segment_tx(
         "segment_id": segment_id,
         "graph_version": graph_version,
         "source_version": source_version,
+        "index_node_id": index_node_id,
     }
     tx.run(
         "MATCH (existing:GraphSegment {"
         "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-        "graph_version: $graph_version, source_version: $source_version, id: $segment_id}) "
+        "index_node_id: $index_node_id, graph_version: $graph_version, "
+            "source_version: $source_version, id: $segment_id}) "
         "DETACH DELETE existing",
         **scope,
     )
     tx.run(
         "MERGE (s:GraphSegment {"
         "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-        "graph_version: $graph_version, source_version: $source_version, id: $segment_id}) "
+        "index_node_id: $index_node_id, graph_version: $graph_version, "
+            "source_version: $source_version, id: $segment_id}) "
         "ON CREATE SET s.created_at = datetime() "
         "SET s.updated_at = datetime()",
         **scope,
     )
 
-    for name, entity_type in extraction.entities:
+    for entity in extraction.entities:
+        entity_attributes = {f"attr_{name}": value for name, value in entity.properties.items()}
         tx.run(
             "MATCH (s:GraphSegment {"
             "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-            "graph_version: $graph_version, source_version: $source_version, id: $segment_id}) "
+            "index_node_id: $index_node_id, graph_version: $graph_version, "
+            "source_version: $source_version, id: $segment_id}) "
             "MERGE (e:GraphEntity {"
             "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-            "graph_version: $graph_version, source_version: $source_version, "
+            "index_node_id: $index_node_id, graph_version: $graph_version, source_version: $source_version, "
             "name: $entity_name, type: $entity_type}) "
             "ON CREATE SET e.created_at = datetime() "
-            "SET e.updated_at = datetime() "
+            "SET e.updated_at = datetime(), e += $entity_attributes "
             "MERGE (s)-[mention:MENTIONS]->(e) "
             "SET mention.tenant_id = $tenant_id, mention.dataset_id = $dataset_id, "
-            "mention.document_id = $document_id, mention.graph_version = $graph_version, "
-            "mention.source_version = $source_version",
+            "mention.document_id = $document_id, mention.index_node_id = $index_node_id, "
+            "mention.graph_version = $graph_version, mention.source_version = $source_version",
             **scope,
-            entity_name=name,
-            entity_type=entity_type,
+            entity_name=entity.name,
+            entity_type=entity.entity_type,
+            entity_attributes=entity_attributes,
         )
 
     for triple in extraction.triples:
@@ -323,34 +352,36 @@ def _upsert_fact(
     tx.run(
         "MATCH (s:GraphSegment {"
         "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-        "graph_version: $graph_version, source_version: $source_version, id: $segment_id}) "
+        "index_node_id: $index_node_id, graph_version: $graph_version, "
+            "source_version: $source_version, id: $segment_id}) "
         "MATCH (source:GraphEntity {"
         "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-        "graph_version: $graph_version, source_version: $source_version, "
+        "index_node_id: $index_node_id, graph_version: $graph_version, source_version: $source_version, "
         "name: $source_name, type: $source_type}) "
         "MATCH (target:GraphEntity {"
         "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-        "graph_version: $graph_version, source_version: $source_version, "
+        "index_node_id: $index_node_id, graph_version: $graph_version, source_version: $source_version, "
         "name: $target_name, type: $target_type}) "
         "MERGE (f:GraphFact {"
         "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-        "graph_version: $graph_version, source_version: $source_version, fact_key: $fact_key}) "
+        "index_node_id: $index_node_id, graph_version: $graph_version, "
+        "source_version: $source_version, fact_key: $fact_key}) "
         "ON CREATE SET f.created_at = datetime() "
         "SET f.updated_at = datetime(), f.relation = $relation, "
         "f.source_name = $source_name, f.source_type = $source_type, "
         "f.target_name = $target_name, f.target_type = $target_type "
         "MERGE (source)-[source_link:FACT_SOURCE]->(f) "
         "SET source_link.tenant_id = $tenant_id, source_link.dataset_id = $dataset_id, "
-        "source_link.document_id = $document_id, source_link.graph_version = $graph_version, "
-        "source_link.source_version = $source_version "
+        "source_link.document_id = $document_id, source_link.index_node_id = $index_node_id, "
+        "source_link.graph_version = $graph_version, source_link.source_version = $source_version "
         "MERGE (f)-[target_link:FACT_TARGET]->(target) "
         "SET target_link.tenant_id = $tenant_id, target_link.dataset_id = $dataset_id, "
-        "target_link.document_id = $document_id, target_link.graph_version = $graph_version, "
-        "target_link.source_version = $source_version "
+        "target_link.document_id = $document_id, target_link.index_node_id = $index_node_id, "
+        "target_link.graph_version = $graph_version, target_link.source_version = $source_version "
         "MERGE (s)-[evidence:EVIDENCE_FOR]->(f) "
         "SET evidence.tenant_id = $tenant_id, evidence.dataset_id = $dataset_id, "
-        "evidence.document_id = $document_id, evidence.graph_version = $graph_version, "
-        "evidence.source_version = $source_version",
+        "evidence.document_id = $document_id, evidence.index_node_id = $index_node_id, "
+        "evidence.graph_version = $graph_version, evidence.source_version = $source_version",
         **scope,
         fact_key=fact_key,
         source_name=triple.source,
@@ -366,18 +397,26 @@ def _delete_orphan_current_version_nodes(tx: _Neo4jTransaction, *, scope: dict[s
     tx.run(
         "MATCH (fact:GraphFact {"
         "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-        "graph_version: $graph_version, source_version: $source_version}) "
-        "WHERE NOT EXISTS { MATCH (:GraphSegment)-[:EVIDENCE_FOR]->(fact) } "
+        "index_node_id: $index_node_id, graph_version: $graph_version, source_version: $source_version}) "
+        "WHERE NOT EXISTS { MATCH (:GraphSegment {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "document_id: $document_id, index_node_id: $index_node_id, graph_version: $graph_version, "
+        "source_version: $source_version})-[:EVIDENCE_FOR {index_node_id: $index_node_id}]->(fact) } "
         "DETACH DELETE fact",
         **scope,
     )
     tx.run(
         "MATCH (entity:GraphEntity {"
         "tenant_id: $tenant_id, dataset_id: $dataset_id, document_id: $document_id, "
-        "graph_version: $graph_version, source_version: $source_version}) "
-        "WHERE NOT EXISTS { MATCH (:GraphSegment)-[:MENTIONS]->(entity) } "
-        "AND NOT EXISTS { MATCH (entity)-[:FACT_SOURCE]->(:GraphFact) } "
-        "AND NOT EXISTS { MATCH (:GraphFact)-[:FACT_TARGET]->(entity) } "
+        "index_node_id: $index_node_id, graph_version: $graph_version, source_version: $source_version}) "
+        "WHERE NOT EXISTS { MATCH (:GraphSegment {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "document_id: $document_id, index_node_id: $index_node_id, graph_version: $graph_version, "
+        "source_version: $source_version})-[:MENTIONS {index_node_id: $index_node_id}]->(entity) } "
+        "AND NOT EXISTS { MATCH (entity)-[:FACT_SOURCE {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id}]->(:GraphFact {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id}) } "
+        "AND NOT EXISTS { MATCH (:GraphFact {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id})-[:FACT_TARGET {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id}]->(entity) } "
         "DETACH DELETE entity",
         **scope,
     )
@@ -390,16 +429,19 @@ def _reconcile_dataset_graph_tx(
     dataset_id: str,
     active_document_ids: list[str],
     active_segment_ids: list[str],
+    index_node_id: str,
 ) -> None:
     parameters = {
         "tenant_id": tenant_id,
         "dataset_id": dataset_id,
+        "index_node_id": index_node_id,
         "active_document_ids": active_document_ids,
         "active_segment_ids": active_segment_ids,
     }
     tx.run(
         "MATCH (node:GraphSegment) "
         "WHERE node.tenant_id = $tenant_id AND node.dataset_id = $dataset_id "
+        "AND node.index_node_id = $index_node_id "
         "AND (NOT node.document_id IN $active_document_ids OR NOT node.id IN $active_segment_ids) "
         "DETACH DELETE node",
         **parameters,
@@ -408,6 +450,7 @@ def _reconcile_dataset_graph_tx(
         tx.run(
             f"MATCH (node:{label}) "
             "WHERE node.tenant_id = $tenant_id AND node.dataset_id = $dataset_id "
+            "AND node.index_node_id = $index_node_id "
             "AND NOT node.document_id IN $active_document_ids "
             "DETACH DELETE node",
             **parameters,
@@ -415,16 +458,26 @@ def _reconcile_dataset_graph_tx(
     tx.run(
         "MATCH (fact:GraphFact) "
         "WHERE fact.tenant_id = $tenant_id AND fact.dataset_id = $dataset_id "
-        "AND NOT EXISTS { MATCH (:GraphSegment)-[:EVIDENCE_FOR]->(fact) } "
+        "AND fact.index_node_id = $index_node_id "
+        "AND NOT EXISTS { MATCH (:GraphSegment {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id})-[:EVIDENCE_FOR {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id}]->(fact) } "
         "DETACH DELETE fact",
         **parameters,
     )
     tx.run(
         "MATCH (entity:GraphEntity) "
         "WHERE entity.tenant_id = $tenant_id AND entity.dataset_id = $dataset_id "
-        "AND NOT EXISTS { MATCH (:GraphSegment)-[:MENTIONS]->(entity) } "
-        "AND NOT EXISTS { MATCH (entity)-[:FACT_SOURCE]->(:GraphFact) } "
-        "AND NOT EXISTS { MATCH (:GraphFact)-[:FACT_TARGET]->(entity) } "
+        "AND entity.index_node_id = $index_node_id "
+        "AND NOT EXISTS { MATCH (:GraphSegment {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id})-[:MENTIONS {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id}]->(entity) } "
+        "AND NOT EXISTS { MATCH (entity)-[:FACT_SOURCE {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id}]->(:GraphFact {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id}) } "
+        "AND NOT EXISTS { MATCH (:GraphFact {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id})-[:FACT_TARGET {tenant_id: $tenant_id, dataset_id: $dataset_id, "
+        "index_node_id: $index_node_id}]->(entity) } "
         "DETACH DELETE entity",
         **parameters,
     )
@@ -438,6 +491,7 @@ def _discard_document_version_tx(
     document_id: str,
     graph_version: str,
     source_version: str,
+    index_node_id: str,
 ) -> None:
     parameters = {
         "tenant_id": tenant_id,
@@ -445,6 +499,7 @@ def _discard_document_version_tx(
         "document_id": document_id,
         "graph_version": graph_version,
         "source_version": source_version,
+        "index_node_id": index_node_id,
     }
     for label in ("GraphSegment", "GraphFact", "GraphEntity"):
         tx.run(
@@ -452,6 +507,7 @@ def _discard_document_version_tx(
             "WHERE node.tenant_id = $tenant_id "
             "AND node.dataset_id = $dataset_id "
             "AND node.document_id = $document_id "
+            "AND node.index_node_id = $index_node_id "
             "AND node.graph_version = $graph_version "
             "AND node.source_version = $source_version "
             "DETACH DELETE node",
@@ -467,6 +523,7 @@ def _finalize_document_version_tx(
     document_id: str,
     graph_version: str,
     source_version: str,
+    index_node_id: str,
 ) -> None:
     parameters = {
         "tenant_id": tenant_id,
@@ -474,6 +531,7 @@ def _finalize_document_version_tx(
         "document_id": document_id,
         "graph_version": graph_version,
         "source_version": source_version,
+        "index_node_id": index_node_id,
     }
     # 按标签执行查询，允许 Neo4j 使用各标签的范围索引，避免 MATCH (node) 全图扫描。
     for label in ("GraphSegment", "GraphFact", "GraphEntity"):
@@ -482,6 +540,7 @@ def _finalize_document_version_tx(
             "WHERE node.tenant_id = $tenant_id "
             "AND node.dataset_id = $dataset_id "
             "AND node.document_id = $document_id "
+            "AND node.index_node_id = $index_node_id "
             "AND (node.graph_version <> $graph_version OR node.source_version <> $source_version) "
             "DETACH DELETE node",
             **parameters,

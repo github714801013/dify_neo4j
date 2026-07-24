@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from collections.abc import Callable, Generator, Mapping, Sequence
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
@@ -33,6 +34,7 @@ from core.rag.entities import DatasourceCompletedEvent, DatasourceErrorEvent, Da
 from core.repositories.factory import DifyCoreRepositoryFactory, OrderConfig
 from core.repositories.sqlalchemy_workflow_node_execution_repository import SQLAlchemyWorkflowNodeExecutionRepository
 from core.workflow.node_factory import LATEST_VERSION, get_node_type_classes_mapping
+from core.workflow.nodes.knowledge_index.entities import KnowledgeIndexNodeData
 from core.workflow.system_variables import (
     SystemVariableKey,
     build_bootstrap_variables,
@@ -324,6 +326,27 @@ class RagPipelineService:
 
         return workflows, has_more
 
+    @staticmethod
+    def _normalize_knowledge_index_graph_config(graph: dict[str, Any]) -> dict[str, Any]:
+        """校验并规范化 Knowledge Base 节点的图谱索引配置后再持久化草稿。"""
+        normalized_graph = deepcopy(graph)
+        nodes = normalized_graph.get("nodes", [])
+        if not isinstance(nodes, list):
+            return normalized_graph
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            data = node.get("data")
+            if not isinstance(data, dict) or data.get("type") != "knowledge-index":
+                continue
+
+            node_data = KnowledgeIndexNodeData.model_validate(data)
+            if node_data.graph_index_config is not None:
+                data["graph_index_config"] = node_data.graph_index_config.model_dump(exclude_none=True)
+
+        return normalized_graph
+
     def sync_draft_workflow(
         self,
         *,
@@ -339,6 +362,8 @@ class RagPipelineService:
         Sync draft workflow
         :raises WorkflowHashNotEqualError
         """
+        graph = self._normalize_knowledge_index_graph_config(graph)
+
         # fetch draft workflow by app_model
         workflow = self.get_draft_workflow(pipeline=pipeline)
 

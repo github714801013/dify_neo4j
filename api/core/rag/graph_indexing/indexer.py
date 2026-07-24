@@ -23,11 +23,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, true
 from sqlalchemy.orm import Session
 
 from core.rag.graph.entities import GraphExtractModelConfig, GraphSchema
-from core.rag.graph_indexing.entities import GraphIndexJobStatus
+from core.rag.graph_indexing.entities import DATASET_GRAPH_INDEX_SCOPE, GraphIndexJobStatus
 from core.rag.graph_indexing.extractor import GraphExtractionError, extract_with_llm
 from core.rag.graph_indexing.neo4j_writer import (
     GraphWriteError,
@@ -35,6 +35,10 @@ from core.rag.graph_indexing.neo4j_writer import (
     ensure_graph_schema,
     finalize_document_version,
     write_segment,
+)
+from core.rag.graph_indexing.scopes import (
+    list_published_node_graph_scopes,
+    resolve_published_node_graph_scope,
 )
 from core.rag.graph_indexing.versioning import (
     build_segment_source_facts,
@@ -63,6 +67,7 @@ class GraphIndexJobRequest:
     document_id: str
     graph_version: str
     source_version: str
+    index_node_id: str = DATASET_GRAPH_INDEX_SCOPE
 
     @classmethod
     def from_job(cls, job: DatasetGraphIndexJob) -> GraphIndexJobRequest:
@@ -73,6 +78,7 @@ class GraphIndexJobRequest:
             document_id=job.document_id,
             graph_version=job.graph_version,
             source_version=job.source_version,
+            index_node_id=job.index_node_id,
         )
 
 
@@ -128,11 +134,15 @@ class _IndexInput:
 
 def run_indexer(job: GraphIndexJobRequest) -> GraphIndexOutcome:
     """处理单个 Graph Index Job，并返回由 Worker 持久化的结果。"""
+    if job.index_node_id != DATASET_GRAPH_INDEX_SCOPE and not _is_node_scope_current(job):
+        return _cancel_missing_node_scope(job)
     if not _is_source_version_current(job):
         return _discard_stale_version(job)
 
     index_input = _load_index_input(job)
     if index_input is None:
+        if job.index_node_id != DATASET_GRAPH_INDEX_SCOPE:
+            return _cancel_missing_node_scope(job)
         return GraphIndexOutcome.failed(
             error_code="graph_indexer_config_missing",
             error_message="dataset graph config missing or disabled",
@@ -164,10 +174,13 @@ def run_indexer(job: GraphIndexJobRequest) -> GraphIndexOutcome:
                 segment_id=segment.id,
                 graph_version=job.graph_version,
                 source_version=job.source_version,
+                index_node_id=job.index_node_id,
                 extraction=extraction,
             )
             processed_segments += 1
 
+        if job.index_node_id != DATASET_GRAPH_INDEX_SCOPE and not _is_node_scope_current(job):
+            return _cancel_missing_node_scope(job)
         if not _is_source_version_current(job):
             return _discard_stale_version(job)
 
@@ -177,7 +190,10 @@ def run_indexer(job: GraphIndexJobRequest) -> GraphIndexOutcome:
             document_id=job.document_id,
             graph_version=job.graph_version,
             source_version=job.source_version,
+            index_node_id=job.index_node_id,
         )
+        if job.index_node_id != DATASET_GRAPH_INDEX_SCOPE and not _is_node_scope_current(job):
+            return _cancel_missing_node_scope(job)
         if not _is_source_version_current(job):
             return _discard_stale_version(job)
     except GraphExtractionError as ex:
@@ -218,6 +234,7 @@ def _discard_stale_version(job: GraphIndexJobRequest) -> GraphIndexOutcome:
             document_id=job.document_id,
             graph_version=job.graph_version,
             source_version=job.source_version,
+            index_node_id=job.index_node_id,
         )
     except GraphWriteError as ex:
         message = ex.args[0] if ex.args else "discard stale graph version failed"
@@ -243,8 +260,27 @@ def _discard_stale_version(job: GraphIndexJobRequest) -> GraphIndexOutcome:
     )
 
 
+def _cancel_missing_node_scope(job: GraphIndexJobRequest) -> GraphIndexOutcome:
+    """节点配置被删除、禁用或换版时取消 Job，保留该 scope 的既有图数据。"""
+    return GraphIndexOutcome.cancelled(
+        error_code="graph_indexer_node_scope_inactive",
+        error_message="published node graph config is missing, disabled, or changed",
+    )
+
+
+def _is_node_scope_current(job: GraphIndexJobRequest) -> bool:
+    with Session(db.engine, expire_on_commit=False) as session:
+        scope = resolve_published_node_graph_scope(
+            session,
+            tenant_id=job.tenant_id,
+            dataset_id=job.dataset_id,
+            index_node_id=job.index_node_id,
+        )
+    return scope is not None and scope.graph_version == job.graph_version
+
+
 def _is_source_version_current(job: GraphIndexJobRequest) -> bool:
-    """核对 Job source_version 是否仍对应当前有效 Document。"""
+    """核对 Job source_version 是否仍对应当前有效 Document 与 scope Segment。"""
     with Session(db.engine, expire_on_commit=False) as session:
         document = session.scalar(
             select(Document).where(
@@ -261,6 +297,7 @@ def _is_source_version_current(job: GraphIndexJobRequest) -> bool:
             or document.completed_at is None
         ):
             return False
+        segment_scope = _segment_scope_predicate(session, job)
         segments = session.scalars(
             select(DocumentSegment)
             .where(
@@ -269,6 +306,7 @@ def _is_source_version_current(job: GraphIndexJobRequest) -> bool:
                 DocumentSegment.document_id == job.document_id,
                 DocumentSegment.enabled.is_(True),
                 DocumentSegment.status == SegmentStatus.COMPLETED,
+                segment_scope,
             )
             .order_by(DocumentSegment.position, DocumentSegment.id)
         ).all()
@@ -291,17 +329,40 @@ def _is_source_version_current(job: GraphIndexJobRequest) -> bool:
 
 
 def _load_index_input(job: GraphIndexJobRequest) -> _IndexInput | None:
-    """在短数据库会话中加载配置和 Segment 快照，关闭会话后才执行外部 I/O。"""
+    """在短数据库会话中加载当前 scope 配置和 Segment 快照。"""
     with Session(db.engine, expire_on_commit=False) as session:
-        config = session.scalar(
-            select(DatasetGraphConfig).where(
-                DatasetGraphConfig.tenant_id == job.tenant_id,
-                DatasetGraphConfig.dataset_id == job.dataset_id,
+        if job.index_node_id == DATASET_GRAPH_INDEX_SCOPE:
+            config = session.scalar(
+                select(DatasetGraphConfig).where(
+                    DatasetGraphConfig.tenant_id == job.tenant_id,
+                    DatasetGraphConfig.dataset_id == job.dataset_id,
+                )
             )
-        )
-        if config is None or not config.enabled or config.extract_model_config is None:
-            return None
+            if config is None or not config.enabled or config.extract_model_config is None:
+                return None
+            schema = GraphSchema.model_validate(config.schema_json)
+            extract_model = GraphExtractModelConfig.model_validate(config.extract_model_config)
+        else:
+            node_scope = resolve_published_node_graph_scope(
+                session,
+                tenant_id=job.tenant_id,
+                dataset_id=job.dataset_id,
+                index_node_id=job.index_node_id,
+            )
+            if node_scope is None or node_scope.graph_version != job.graph_version:
+                return None
+            graph_config = node_scope.graph_config
+            if graph_config.schema is None or graph_config.extract_model_config is None:
+                return None
+            schema = GraphSchema(
+                entity_types=[item.name for item in graph_config.schema.entity_types],
+                relation_types=[item.name for item in graph_config.schema.relation_types],
+                allowed_triples=[item.as_tuple() for item in graph_config.schema.allowed_triples],
+                entity_properties={item.name: item.properties for item in graph_config.schema.entity_types},
+            )
+            extract_model = graph_config.extract_model_config
 
+        segment_scope = _segment_scope_predicate(session, job)
         segments = session.scalars(
             select(DocumentSegment)
             .where(
@@ -310,15 +371,31 @@ def _load_index_input(job: GraphIndexJobRequest) -> _IndexInput | None:
                 DocumentSegment.dataset_id == job.dataset_id,
                 DocumentSegment.enabled.is_(True),
                 DocumentSegment.status == SegmentStatus.COMPLETED,
+                segment_scope,
             )
             .order_by(DocumentSegment.position.asc())
         ).all()
         segment_inputs = tuple(_SegmentInput(id=segment.id, content=segment.content or "") for segment in segments)
-        return _IndexInput(
-            schema=GraphSchema.model_validate(config.schema_json),
-            extract_model=GraphExtractModelConfig.model_validate(config.extract_model_config),
-            segments=segment_inputs,
+        return _IndexInput(schema=schema, extract_model=extract_model, segments=segment_inputs)
+
+
+def _segment_scope_predicate(session: Session, job: GraphIndexJobRequest):
+    if job.index_node_id != DATASET_GRAPH_INDEX_SCOPE:
+        return DocumentSegment.index_node_id == job.index_node_id
+    excluded_index_node_ids = {
+        scope.index_node_id
+        for scope in list_published_node_graph_scopes(
+            session,
+            tenant_id=job.tenant_id,
+            dataset_id=job.dataset_id,
         )
+    }
+    if not excluded_index_node_ids:
+        return true()
+    return or_(
+        DocumentSegment.index_node_id.is_(None),
+        DocumentSegment.index_node_id.not_in(excluded_index_node_ids),
+    )
 
 
 __all__ = [

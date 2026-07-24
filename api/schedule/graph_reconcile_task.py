@@ -51,12 +51,14 @@ def _reconcile_graph_data(plan: GraphReconcilePlan) -> None:
                 dataset_id=command.dataset_id,
                 active_document_ids=command.active_document_ids,
                 active_segment_ids=command.active_segment_ids,
+                index_node_id=command.index_node_id,
             )
         except Exception:
             logger.exception(
-                "failed to reconcile graph lifecycle tenant=%s dataset=%s",
+                "failed to reconcile graph lifecycle tenant=%s dataset=%s scope=%s",
                 command.tenant_id,
                 command.dataset_id,
+                command.index_node_id,
             )
 
 

@@ -32,6 +32,8 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from operator import itemgetter
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -128,6 +130,71 @@ def compute_source_version(
     payload = {
         "document": facts.to_payload(),
         "segments": [item.to_payload() for item in sorted(segment_facts, key=lambda item: item.segment_id)],
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def compute_graph_version(config: Any) -> str:
+    """根据规范化的节点图谱索引配置计算稳定版本。
+
+    版本只包含会影响三元组抽取结果的 Schema 与抽取模型参数。实体、关系和
+    三元组都按其稳定键排序，因此编辑器展示顺序变化不会触发不必要的重建。
+    函数只使用传入配置，不访问数据库或全局状态。
+    """
+    if config.schema is None or config.extract_model_config is None:
+        raise ValueError("enabled graph indexing requires schema and extract_model_config")
+
+    schema = config.schema
+    extract_model_config = config.extract_model_config
+    payload = {
+        "schema": {
+            "entity_types": sorted(
+                (
+                    {
+                        "name": item.name,
+                        "properties": sorted(
+                            (property_definition.model_dump(mode="json") for property_definition in item.properties),
+                            key=itemgetter("name"),
+                        ),
+                    }
+                    for item in schema.entity_types
+                ),
+                key=itemgetter("name"),
+            ),
+            "relation_types": sorted(
+                (
+                    {
+                        "name": item.name,
+                        "properties": sorted(
+                            (property_definition.model_dump(mode="json") for property_definition in item.properties),
+                            key=itemgetter("name"),
+                        ),
+                    }
+                    for item in schema.relation_types
+                ),
+                key=itemgetter("name"),
+            ),
+            "allowed_triples": sorted(
+                (
+                    {
+                        "source_type": item.source_type,
+                        "relation_type": item.relation_type,
+                        "target_type": item.target_type,
+                    }
+                    for item in schema.allowed_triples
+                ),
+                key=itemgetter("source_type", "relation_type", "target_type"),
+            ),
+        },
+        "extract_model_config": {
+            "provider": extract_model_config.provider,
+            "model": extract_model_config.model,
+            "temperature": extract_model_config.temperature,
+            "max_tokens": extract_model_config.max_tokens,
+            "max_triplets_per_chunk": extract_model_config.max_triplets_per_chunk,
+            "strict": extract_model_config.strict,
+        },
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(serialized).hexdigest()

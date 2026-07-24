@@ -1,9 +1,11 @@
 """Neo4j GraphRAG 写入模型与版本切换测试。"""
 
 from dataclasses import dataclass, field
+from datetime import date
 from unittest.mock import patch
 
-from core.rag.graph_indexing.extractor import ExtractedTriple, ExtractionResult
+from core.rag.graph_indexing.entities import DATASET_GRAPH_INDEX_SCOPE
+from core.rag.graph_indexing.extractor import ExtractedEntity, ExtractedTriple, ExtractionResult
 from core.rag.graph_indexing.neo4j_writer import (
     discard_document_version,
     ensure_graph_schema,
@@ -58,7 +60,14 @@ class _FakeDriver:
 
 def _extraction() -> ExtractionResult:
     return ExtractionResult(
-        entities=[("Dify", "PRODUCT"), ("Knowledge", "MODULE")],
+        entities=[
+            ExtractedEntity(
+                name="Dify",
+                entity_type="PRODUCT",
+                properties={"display_name": "Dify 平台", "release_date": date(2026, 7, 24)},
+            ),
+            ExtractedEntity(name="Knowledge", entity_type="MODULE"),
+        ],
         triples=[
             ExtractedTriple(
                 source="Dify",
@@ -112,6 +121,31 @@ def test_write_queries_carry_full_tenant_document_and_version_scope():
         assert run.parameters["document_id"] == "document-1"
         assert run.parameters["graph_version"] == "v2"
         assert run.parameters["source_version"] == "source-v3"
+        assert run.parameters["index_node_id"] == DATASET_GRAPH_INDEX_SCOPE
+
+
+def test_write_segment_prefixes_entity_attributes_without_touching_facts():
+    driver = _FakeDriver()
+
+    _write(driver, "segment-1")
+
+    entity_runs = [run for run in driver.transaction.runs if "MERGE (e:GraphEntity" in run.query]
+    assert len(entity_runs) == 2
+    dify_run = next(run for run in entity_runs if run.parameters["entity_name"] == "Dify")
+    assert "SET e.updated_at = datetime(), e += $entity_attributes" in dify_run.query
+    assert dify_run.parameters["entity_attributes"] == {
+        "attr_display_name": "Dify 平台",
+        "attr_release_date": date(2026, 7, 24),
+    }
+    assert all(name.startswith("attr_") for name in dify_run.parameters["entity_attributes"])
+    assert all(
+        name not in dify_run.parameters["entity_attributes"]
+        for name in ("tenant_id", "created_at", "updated_at")
+    )
+
+    fact_runs = [run for run in driver.transaction.runs if "MERGE (f:GraphFact" in run.query]
+    assert len(fact_runs) == 1
+    assert "entity_attributes" not in fact_runs[0].parameters
 
 
 def test_repeated_segment_write_uses_merge_for_nodes_facts_and_evidence():
@@ -126,7 +160,11 @@ def test_repeated_segment_write_uses_merge_for_nodes_facts_and_evidence():
     assert "MERGE (e:GraphEntity" in queries
     assert "MERGE (f:GraphFact" in queries
     assert "MERGE (s)-[evidence:EVIDENCE_FOR]->(f)" in queries
-    assert "NOT EXISTS { MATCH (:GraphSegment)-[:EVIDENCE_FOR]->(fact) }" in queries
+    assert "index_node_id: $index_node_id" in queries
+    assert "EVIDENCE_FOR {index_node_id: $index_node_id}" in queries
+    assert "MENTIONS {index_node_id: $index_node_id}" in queries
+    assert "FACT_SOURCE {tenant_id: $tenant_id, dataset_id: $dataset_id" in queries
+    assert "FACT_TARGET {tenant_id: $tenant_id, dataset_id: $dataset_id" in queries
 
 
 def test_finalize_deletes_only_other_document_versions():
@@ -158,6 +196,7 @@ def test_finalize_deletes_only_other_document_versions():
             "document_id": "document-1",
             "graph_version": "v2",
             "source_version": "source-v3",
+            "index_node_id": DATASET_GRAPH_INDEX_SCOPE,
         }
 
 
@@ -181,6 +220,7 @@ def test_discard_deletes_only_the_exact_document_version():
         assert cleanup.parameters["tenant_id"] == "tenant-1"
         assert cleanup.parameters["dataset_id"] == "dataset-1"
         assert cleanup.parameters["document_id"] == "document-1"
+        assert cleanup.parameters["index_node_id"] == DATASET_GRAPH_INDEX_SCOPE
 
 
 def test_reconcile_dataset_graph_deletes_inactive_documents_and_segments_then_orphans():
@@ -205,6 +245,7 @@ def test_reconcile_dataset_graph_deletes_inactive_documents_and_segments_then_or
         assert run.parameters["dataset_id"] == "dataset-1"
         assert run.parameters["active_document_ids"] == ["document-1", "document-2"]
         assert run.parameters["active_segment_ids"] == ["segment-1", "segment-2"]
+        assert run.parameters["index_node_id"] == DATASET_GRAPH_INDEX_SCOPE
 
 
 def test_schema_initialization_is_process_idempotent():
@@ -223,4 +264,28 @@ def test_schema_initialization_is_process_idempotent():
     assert len(driver.schema_queries) == first_count
     assert any("GraphEntity" in query and "IS UNIQUE" in query for query in driver.schema_queries)
     assert any("GraphFact" in query and "IS UNIQUE" in query for query in driver.schema_queries)
+    assert any("SET n.index_node_id = '__dataset__'" in query for query in driver.schema_queries)
+    assert any("DROP CONSTRAINT graph_entity_identity" in query for query in driver.schema_queries)
     assert any("GraphSegment" in query and "IS UNIQUE" in query for query in driver.schema_queries)
+
+
+def test_lifecycle_cleanup_uses_node_scope_to_avoid_cross_scope_deletion():
+    from core.rag.graph_indexing import neo4j_writer as module
+
+    driver = _FakeDriver()
+    with patch.object(module, "_get_driver", return_value=driver):
+        reconcile_dataset_graph(
+            tenant_id="tenant-1",
+            dataset_id="dataset-1",
+            active_document_ids=("document-1",),
+            active_segment_ids=("segment-1",),
+            index_node_id="knowledge-node-1",
+        )
+
+    for run in driver.transaction.runs:
+        assert run.parameters["index_node_id"] == "knowledge-node-1"
+    queries = "\n".join(run.query for run in driver.transaction.runs)
+    assert "node.index_node_id = $index_node_id" in queries
+    assert "EVIDENCE_FOR {tenant_id: $tenant_id, dataset_id: $dataset_id, " in queries
+    assert "FACT_SOURCE {tenant_id: $tenant_id, dataset_id: $dataset_id, " in queries
+    assert "FACT_TARGET {tenant_id: $tenant_id, dataset_id: $dataset_id, " in queries

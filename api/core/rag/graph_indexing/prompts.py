@@ -10,13 +10,18 @@ from core.rag.graph.entities import GraphSchema
 
 _EXTRACTION_OUTPUT_SPEC = """{
   "entities": [
-    {"name": "<entity surface form>", "type": "<one of allowed entity types>"}
+    {
+      "name": "<entity surface form>",
+      "type": "<one of allowed entity types>",
+      "properties": {"<declared property name>": "<typed value>"}
+    }
   ],
   "relations": [
     {
       "source": "<entity name>",
       "type": "<one of allowed relation types>",
-      "target": "<entity name>"
+      "target": "<entity name>",
+      "properties": {}
     }
   ]
 }"""
@@ -26,6 +31,23 @@ _SYSTEM_PROMPT = (
     "不要输出任何解释、注释或 Markdown 代码块标记。"
     "实体与关系必须使用给定词表；不在词表内的内容直接忽略。"
 )
+
+
+def _format_entity_property_requirements(schema: GraphSchema) -> str:
+    """渲染实体属性契约，供模型输出严格的嵌套 JSON 属性。"""
+    lines: list[str] = []
+    for entity_type in schema.entity_types:
+        definitions = schema.entity_properties.get(entity_type, [])
+        if not definitions:
+            lines.append(f"- {entity_type}: 不允许输出 properties 中的任何字段。")
+            continue
+        properties = "; ".join(
+            f"{definition.name} ({definition.value_type}, {'必填' if definition.required else '可选'}): "
+            f"{definition.description}"
+            for definition in definitions
+        )
+        lines.append(f"- {entity_type}: {properties}")
+    return "\n".join(lines)
 
 
 def build_user_prompt(
@@ -39,6 +61,7 @@ def build_user_prompt(
     entity_types = ", ".join(schema.entity_types)
     relation_types = ", ".join(schema.relation_types)
     triples = "; ".join(f"{source}-{relation}->{target}" for source, relation, target in schema.allowed_triples)
+    entity_property_requirements = _format_entity_property_requirements(schema)
     triple_rule = (
         "关系的源类型、关系类型和目标类型必须命中允许的三元组组合。"
         if strict
@@ -54,8 +77,14 @@ def build_user_prompt(
         "2. 只输出实体类型和关系类型属于允许词表的内容。\n"
         f"3. {triple_rule}\n"
         "4. source 与 target 的 name 必须在 entities 中出现过。\n"
-        f"5. relations 最多输出 {max_triplets_per_chunk} 条，优先保留信息明确且重要的事实。\n"
-        "6. 若文本无可抽取内容，输出空数组。\n\n"
+        "5. 每个实体必须使用嵌套 properties 对象；仅输出该实体类型已声明的属性。"
+        "属性值必须是对应 JSON 标量类型：string 为非空字符串，number 为有限 JSON 数字，"
+        "boolean 为 JSON 布尔值，date 为严格 YYYY-MM-DD 字符串。不得猜测、转换或输出数组、对象。\n"
+        "6. 未声明的可选属性直接省略；缺少必填属性的实体不要输出。\n"
+        "7. relations 的 properties 当前必须为空对象，不要输出关系属性。\n"
+        f"8. relations 最多输出 {max_triplets_per_chunk} 条，优先保留信息明确且重要的事实。\n"
+        "9. 若文本无可抽取内容，输出空数组。\n\n"
+        f"实体属性定义:\n{entity_property_requirements}\n\n"
         f"输出 JSON 结构(仅输出该 JSON):\n{_EXTRACTION_OUTPUT_SPEC}\n\n"
         f"文本:\n{segment_text}"
     )

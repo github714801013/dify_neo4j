@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from core.rag.graph_indexing.entities import (
+    DATASET_GRAPH_INDEX_SCOPE,
     GRAPH_INDEX_STALE_MINUTES,
     GraphIndexJobStatus,
 )
@@ -15,9 +16,11 @@ from core.rag.graph_indexing.errors import (
     GraphIndexJobNotFoundError,
 )
 from core.rag.graph_indexing.repositories import SqlAlchemyGraphIndexJobRepository
+from core.rag.graph_indexing.scopes import PublishedNodeGraphScope
 from core.rag.graph_indexing.versioning import build_source_facts, compute_source_version
+from core.workflow.nodes.knowledge_index.entities import GraphIndexConfig
 from libs.datetime_utils import naive_utc_now
-from models.dataset import Document
+from models.dataset import Document, DocumentSegment, SegmentStatus
 from models.dataset_graph_config import DatasetGraphConfig
 from models.dataset_graph_index_job import DatasetGraphIndexJob
 
@@ -36,6 +39,7 @@ def db_session(_unit_test_engine):
             DatasetGraphConfig.__table__,
             DatasetGraphIndexJob.__table__,
             Document.__table__,
+            DocumentSegment.__table__,
         ],
     )
     yield session
@@ -76,6 +80,21 @@ def _make_document(*, tenant_id: str, dataset_id: str, batch: str = "b1", word_c
     )
 
 
+def _make_segment(*, tenant_id: str, dataset_id: str, document_id: str) -> DocumentSegment:
+    return DocumentSegment(
+        tenant_id=tenant_id,
+        dataset_id=dataset_id,
+        document_id=document_id,
+        position=0,
+        content="segment",
+        word_count=1,
+        tokens=1,
+        created_by=str(uuid4()),
+        status=SegmentStatus.COMPLETED,
+        completed_at=naive_utc_now(),
+    )
+
+
 def _facts(document: Document):
     return build_source_facts(
         document.id,
@@ -83,6 +102,16 @@ def _facts(document: Document):
         completed_at=document.completed_at,
         batch=document.batch,
         word_count=document.word_count,
+    )
+
+
+def _node_scope(*, tenant_id: str, dataset_id: str, index_node_id: str, graph_version: str) -> PublishedNodeGraphScope:
+    return PublishedNodeGraphScope(
+        tenant_id=tenant_id,
+        dataset_id=dataset_id,
+        index_node_id=index_node_id,
+        graph_version=graph_version,
+        graph_config=GraphIndexConfig.model_construct(enabled=True, graph_version=graph_version),
     )
 
 
@@ -175,6 +204,43 @@ class TestCreateIfMissing:
         )
         jobs = db_session.scalars(select(DatasetGraphIndexJob).where(DatasetGraphIndexJob.document_id == doc.id)).all()
         assert {j.graph_version for j in jobs} == {"v1", "v2"}
+
+    def test_different_node_scopes_create_separate_jobs(self, repository, db_session):
+        tenant_id, dataset_id = str(uuid4()), str(uuid4())
+        document = _make_document(tenant_id=tenant_id, dataset_id=dataset_id)
+        db_session.add(document)
+        db_session.flush()
+        source_version = compute_source_version(_facts(document))
+
+        first = repository.create_if_missing(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            document_id=document.id,
+            source_version=source_version,
+            graph_version="v1",
+            index_node_id="node-a",
+        )
+        second = repository.create_if_missing(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            document_id=document.id,
+            source_version=source_version,
+            graph_version="v1",
+            index_node_id="node-b",
+        )
+        duplicate = repository.create_if_missing(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            document_id=document.id,
+            source_version=source_version,
+            graph_version="v1",
+            index_node_id="node-a",
+        )
+
+        assert first is not None
+        assert second is not None
+        assert duplicate is None
+        assert {first.index_node_id, second.index_node_id} == {"node-a", "node-b"}
 
 
 class TestClaimAndTransition:
@@ -591,6 +657,53 @@ class TestDispatchableJobs:
 
         assert [job.id for job in dispatchable] == [current_job.id]
 
+    def test_node_jobs_require_matching_published_scope(self, repository, db_session, monkeypatch):
+        tenant_id, dataset_id = str(uuid4()), str(uuid4())
+        document = _make_document(tenant_id=tenant_id, dataset_id=dataset_id)
+        db_session.add(document)
+        db_session.flush()
+        source_version = compute_source_version(_facts(document))
+        current = repository.create_if_missing(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            document_id=document.id,
+            source_version=source_version,
+            graph_version="node-v2",
+            index_node_id="node-a",
+        )
+        repository.create_if_missing(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            document_id=document.id,
+            source_version="older-source",
+            graph_version="node-v1",
+            index_node_id="node-a",
+        )
+        repository.create_if_missing(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            document_id=document.id,
+            source_version="other-source",
+            graph_version="node-v2",
+            index_node_id="node-b",
+        )
+        assert current is not None
+        monkeypatch.setattr(
+            "core.rag.graph_indexing.repositories.list_published_node_graph_scopes",
+            lambda _session: [
+                _node_scope(
+                    tenant_id=tenant_id,
+                    dataset_id=dataset_id,
+                    index_node_id="node-a",
+                    graph_version="node-v2",
+                )
+            ],
+        )
+
+        dispatchable = repository.list_dispatchable_jobs(limit=10)
+
+        assert [job.id for job in dispatchable] == [current.id]
+
 
 class TestTenantIsolation:
     def test_list_completed_documents_scoped_by_tenant(self, repository, db_session):
@@ -600,9 +713,51 @@ class TestTenantIsolation:
         doc_b = _make_document(tenant_id=tenant_b, dataset_id=dataset_b)
         db_session.add_all([doc_a, doc_b])
         db_session.flush()
+        db_session.add_all(
+            [
+                _make_segment(tenant_id=tenant_a, dataset_id=dataset_a, document_id=doc_a.id),
+                _make_segment(tenant_id=tenant_b, dataset_id=dataset_b, document_id=doc_b.id),
+            ]
+        )
+        db_session.flush()
 
         docs_a = repository.list_completed_documents(tenant_id=tenant_a, dataset_id=dataset_a, limit=10, offset=0)
         assert [d.id for d in docs_a] == [doc_a.id]
+
+    def test_document_and_dataset_scopes_select_disjoint_segments(self, repository, db_session):
+        tenant_id, dataset_id = str(uuid4()), str(uuid4())
+        node_document = _make_document(tenant_id=tenant_id, dataset_id=dataset_id)
+        fallback_document = _make_document(tenant_id=tenant_id, dataset_id=dataset_id)
+        db_session.add_all([node_document, fallback_document])
+        db_session.flush()
+        node_segment = _make_segment(tenant_id=tenant_id, dataset_id=dataset_id, document_id=node_document.id)
+        node_segment.index_node_id = "node-a"
+        fallback_segment = _make_segment(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            document_id=fallback_document.id,
+        )
+        db_session.add_all([node_segment, fallback_segment])
+        db_session.flush()
+
+        node_documents = repository.list_completed_documents(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            limit=10,
+            offset=0,
+            index_node_id="node-a",
+        )
+        fallback_documents = repository.list_completed_documents(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            limit=10,
+            offset=0,
+            index_node_id=DATASET_GRAPH_INDEX_SCOPE,
+            excluded_index_node_ids={"node-a"},
+        )
+
+        assert node_documents == [node_document]
+        assert fallback_documents == [fallback_document]
 
 
 class TestListEnabledGraphConfigs:

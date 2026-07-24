@@ -1,4 +1,5 @@
 import type {
+  GraphIndexConfig,
   KnowledgeBaseNodeType,
   RerankingModel,
   SummaryIndexSetting,
@@ -247,6 +248,9 @@ export const useConfig = (id: string) => {
     })
   }, [handleNodeDataUpdate])
 
+  const handleGraphIndexConfigChange = useCallback((graphIndexConfig: GraphIndexConfig) => {
+    handleNodeDataUpdate({ graph_index_config: graphIndexConfig })
+  }, [handleNodeDataUpdate])
   const handleSummaryIndexSettingChange = useCallback((summaryIndexSetting: SummaryIndexSetting) => {
     const nodeData = getNodeData()
     handleNodeDataUpdate({
@@ -272,5 +276,6 @@ export const useConfig = (id: string) => {
     handleScoreThresholdEnabledChange,
     handleInputVariableChange,
     handleSummaryIndexSettingChange,
+    handleGraphIndexConfigChange,
   }
 }

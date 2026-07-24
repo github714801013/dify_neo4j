@@ -5,6 +5,7 @@ LLM 调用属于后续基础设施适配层。
 """
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, field_validator, model_validator
 
@@ -103,14 +104,33 @@ class GraphQueryDirection(StrEnum):
     BOTH = "both"
 
 
-class GraphSchema(BaseModel):
-    """单个 Dataset GraphRAG 配置允许使用的实体和关系词表。"""
+class GraphPropertyDefinition(BaseModel):
+    """图谱实体或关系类型的单值属性抽取契约。"""
 
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    description: str = Field(min_length=1)
+    value_type: Literal["string", "number", "boolean", "date"]
+    required: StrictBool = False
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str) -> str:
+        normalized_value = value.strip()
+        if not normalized_value:
+            raise ValueError("graph property descriptions cannot be blank")
+        return normalized_value
+
+
+class GraphSchema(BaseModel):
+    """单个 Dataset 或节点 GraphRAG 配置允许使用的实体和关系词表。"""
     model_config = ConfigDict(extra="forbid")
 
     entity_types: list[str] = Field(min_length=1)
     relation_types: list[str] = Field(min_length=1)
     allowed_triples: list[tuple[str, str, str]] = Field(min_length=1)
+    entity_properties: dict[str, list[GraphPropertyDefinition]] = Field(default_factory=dict)
 
     @field_validator("entity_types", "relation_types")
     @classmethod
@@ -131,6 +151,12 @@ class GraphSchema(BaseModel):
                 raise ValueError("allowed_triples must only reference declared entity_types and relation_types")
         if len(self.allowed_triples) != len(set(self.allowed_triples)):
             raise ValueError("allowed_triples must not contain duplicates")
+        for entity_type, properties in self.entity_properties.items():
+            if entity_type not in declared_entities:
+                raise ValueError("entity_properties must only reference declared entity_types")
+            property_names = [item.name for item in properties]
+            if len(property_names) != len(set(property_names)):
+                raise ValueError("graph schema property names must not contain duplicates")
         return self
 
     @classmethod

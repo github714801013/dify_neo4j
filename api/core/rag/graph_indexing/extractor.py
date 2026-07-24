@@ -19,12 +19,15 @@
 from __future__ import annotations
 
 import logging
+import math
+import re
 from dataclasses import dataclass, field
+from datetime import date
 
 import json_repair
 
 from core.model_manager import ModelManager
-from core.rag.graph.entities import GraphSchema
+from core.rag.graph.entities import GraphPropertyDefinition, GraphSchema
 from core.rag.graph_indexing.prompts import _SYSTEM_PROMPT, build_user_prompt
 from graphon.model_runtime.entities.message_entities import (
     SystemPromptMessage,
@@ -37,6 +40,15 @@ logger = logging.getLogger(__name__)
 
 class GraphExtractionError(Exception):
     """LLM 实体抽取阶段的可预期错误。"""
+
+
+@dataclass(frozen=True)
+class ExtractedEntity:
+    """单个已校验实体及其已声明的单值属性。"""
+
+    name: str
+    entity_type: str
+    properties: dict[str, str | int | float | bool | date] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -54,7 +66,7 @@ class ExtractedTriple:
 class ExtractionResult:
     """一次抽取中可安全写入图数据库的实体和事实。"""
 
-    entities: list[tuple[str, str]] = field(default_factory=list)
+    entities: list[ExtractedEntity] = field(default_factory=list)
     triples: list[ExtractedTriple] = field(default_factory=list)
 
 
@@ -147,7 +159,7 @@ def _filter_by_schema(
         raw_relations = []
 
     name_to_type: dict[str, str] = {}
-    entities: list[tuple[str, str]] = []
+    entities: list[ExtractedEntity] = []
     for item in raw_entities:
         if not isinstance(item, dict):
             continue
@@ -155,8 +167,14 @@ def _filter_by_schema(
         entity_type = str(item.get("type") or "").strip()
         if not name or entity_type not in entity_type_set or name in name_to_type:
             continue
+        properties = _filter_entity_properties(
+            item.get("properties"),
+            schema.entity_properties.get(entity_type, []),
+        )
+        if properties is None:
+            continue
         name_to_type[name] = entity_type
-        entities.append((name, entity_type))
+        entities.append(ExtractedEntity(name=name, entity_type=entity_type, properties=properties))
 
     triples: list[ExtractedTriple] = []
     seen_triples: set[tuple[str, str, str, str, str]] = set()
@@ -195,7 +213,46 @@ def _filter_by_schema(
     return ExtractionResult(entities=entities, triples=triples)
 
 
+def _filter_entity_properties(
+    raw_properties: object,
+    definitions: list[GraphPropertyDefinition],
+) -> dict[str, str | int | float | bool | date] | None:
+    """按实体 Schema 验证嵌套属性，缺失必填属性时返回 ``None``。"""
+    properties = raw_properties if isinstance(raw_properties, dict) else {}
+    filtered: dict[str, str | int | float | bool | date] = {}
+    for definition in definitions:
+        value = _validate_property_value(properties.get(definition.name), definition)
+        if value is None:
+            if definition.required:
+                return None
+            continue
+        filtered[definition.name] = value
+    return filtered
+
+
+def _validate_property_value(
+    value: object,
+    definition: GraphPropertyDefinition,
+) -> str | int | float | bool | date | None:
+    """严格验证一个 JSON 标量；不进行任何隐式类型转换。"""
+    if definition.value_type == "string":
+        return value if isinstance(value, str) and value.strip() else None
+    if definition.value_type == "number":
+        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+            return None
+        return value
+    if definition.value_type == "boolean":
+        return value if isinstance(value, bool) else None
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 __all__ = [
+    "ExtractedEntity",
     "ExtractedTriple",
     "ExtractionResult",
     "GraphExtractionError",
