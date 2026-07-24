@@ -1,6 +1,11 @@
 'use client'
 import type { DefaultModel, Model } from '@/app/components/header/account-setting/model-provider-page/declarations'
-import type { DataSet, GraphRagConfig, SummaryIndexSetting as SummaryIndexSettingType } from '@/models/datasets'
+import type {
+  DataSet,
+  GraphExtractionConfig,
+  GraphRetrievalConfig,
+  SummaryIndexSetting as SummaryIndexSettingType,
+} from '@/models/datasets'
 import type { RetrievalConfig } from '@/types/app'
 import { useTranslation } from 'react-i18next'
 import Divider from '@/app/components/base/divider'
@@ -28,13 +33,14 @@ type IndexingSectionProps = {
   embeddingModel: DefaultModel
   setEmbeddingModel: (value: DefaultModel) => void
   embeddingModelList: Model[]
-  textGenerationModelList: Model[]
   retrievalConfig: RetrievalConfig
   setRetrievalConfig: (value: RetrievalConfig) => void
   summaryIndexSetting: SummaryIndexSettingType | undefined
   handleSummaryIndexSettingChange: (payload: SummaryIndexSettingType) => void
-  graphRagConfig: GraphRagConfig
-  setGraphRagConfig: (value: GraphRagConfig) => void
+  graphRetrievalConfig: GraphRetrievalConfig
+  setGraphRetrievalConfig: (value: GraphRetrievalConfig) => void
+  graphExtractionConfig: GraphExtractionConfig
+  setGraphExtractionConfig: (value: GraphExtractionConfig) => void
   showMultiModalTip: boolean
   readonly?: boolean
 }
@@ -48,13 +54,14 @@ const IndexingSection = ({
   embeddingModel,
   setEmbeddingModel,
   embeddingModelList,
-  textGenerationModelList,
   retrievalConfig,
   setRetrievalConfig,
   summaryIndexSetting,
   handleSummaryIndexSettingChange,
-  graphRagConfig,
-  setGraphRagConfig,
+  graphRetrievalConfig,
+  setGraphRetrievalConfig,
+  graphExtractionConfig,
+  setGraphExtractionConfig,
   showMultiModalTip,
   readonly = false,
 }: IndexingSectionProps) => {
@@ -169,7 +176,13 @@ const IndexingSection = ({
         </>
       )}
 
-      <GraphRagSettings config={graphRagConfig} modelList={textGenerationModelList} onChange={setGraphRagConfig} readonly={readonly} />
+      <GraphRagSettings
+        retrievalConfig={graphRetrievalConfig}
+        extractionConfig={graphExtractionConfig}
+        onRetrievalConfigChange={setGraphRetrievalConfig}
+        onExtractionConfigChange={setGraphExtractionConfig}
+        readonly={readonly}
+      />
 
       {/* Retrieval Method Config */}
       {indexMethod && currentDataset?.provider !== 'external' && (

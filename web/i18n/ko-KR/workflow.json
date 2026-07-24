@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "재장전",
   "workflowGenerator.studioApply": "용",
   "workflowGenerator.studioButton": "생성",
-  "workflowGenerator.title": "{{mode}} 생성"
+  "workflowGenerator.title": "{{mode}} 생성",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "관계 속성 추가",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "관계 속성 삭제",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "관계 속성"
 }

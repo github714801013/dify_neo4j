@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "Ponovno naloži",
   "workflowGenerator.studioApply": "Prijavite se",
   "workflowGenerator.studioButton": "Ustvari",
-  "workflowGenerator.title": "Ustvari {{mode}}"
+  "workflowGenerator.title": "Ustvari {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "Dodaj lastnost odnosa",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "Izbriši lastnost odnosa",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "Lastnosti odnosa"
 }

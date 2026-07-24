@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "بارگذاری مجدد",
   "workflowGenerator.studioApply": "درخواست کنید",
   "workflowGenerator.studioButton": "ایجاد کنید",
-  "workflowGenerator.title": "ایجاد {{mode}}"
+  "workflowGenerator.title": "ایجاد {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "افزودن ویژگی رابطه",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "حذف ویژگی رابطه",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "ویژگی‌های رابطه"
 }

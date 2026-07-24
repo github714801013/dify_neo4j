@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from models import Account, Tenant
@@ -2414,3 +2415,89 @@ def test_get_pipeline_returns_pipeline_when_found(
     result = rag_pipeline_service.service.get_pipeline("t1", "d1")
 
     assert result is pipeline
+
+
+def _make_knowledge_index_graph(graph_index_config: dict[str, object]) -> dict[str, object]:
+    return {
+        "nodes": [
+            {
+                "id": "knowledge-index-1",
+                "data": {
+                    "type": "knowledge-index",
+                    "chunk_structure": "text_model",
+                    "index_chunk_variable_selector": [],
+                    "graph_index_config": graph_index_config,
+                },
+            }
+        ]
+    }
+
+
+def _make_valid_graph_index_config() -> dict[str, object]:
+    return {
+        "enabled": True,
+        "schema": {
+            "entity_types": [
+                {"name": "PRODUCT", "properties": []},
+                {"name": "MODULE", "properties": []},
+            ],
+            "relation_types": [{"name": "CONTAINS", "properties": []}],
+            "allowed_triples": [
+                {
+                    "source_type": "PRODUCT",
+                    "relation_type": "CONTAINS",
+                    "target_type": "MODULE",
+                }
+            ],
+        },
+        "extract_model_config": {
+            "provider": "openai",
+            "model": "gpt-4.1-mini",
+        },
+    }
+
+
+def test_sync_draft_workflow_normalizes_knowledge_index_graph_config(
+    mocker: MockerFixture, rag_pipeline_service: RagPipelineServiceTestContext
+) -> None:
+    workflow = _make_workflow(graph={"nodes": []})
+    mocker.patch.object(rag_pipeline_service.service, "get_draft_workflow", return_value=workflow)
+    graph_index_config = _make_valid_graph_index_config()
+    graph_index_config["graph_version"] = "client-controlled"
+
+    result = rag_pipeline_service.service.sync_draft_workflow(
+        pipeline=_make_pipeline(),
+        graph=_make_knowledge_index_graph(graph_index_config),
+        unique_hash=workflow.unique_hash,
+        account=_make_account(),
+        environment_variables=[],
+        conversation_variables=[],
+        rag_pipeline_variables=[],
+    )
+
+    persisted_config = json.loads(result.graph)["nodes"][0]["data"]["graph_index_config"]
+    assert persisted_config["graph_version"] != "client-controlled"
+    assert persisted_config["enabled"] is True
+    rag_pipeline_service.session.commit.assert_called_once()
+
+
+def test_sync_draft_workflow_rejects_invalid_graph_config_without_overwriting_existing_draft(
+    mocker: MockerFixture, rag_pipeline_service: RagPipelineServiceTestContext
+) -> None:
+    workflow = _make_workflow(graph={"nodes": [{"id": "existing-node"}]})
+    original_graph = workflow.graph
+    mocker.patch.object(rag_pipeline_service.service, "get_draft_workflow", return_value=workflow)
+
+    with pytest.raises(ValidationError, match="graph_rag_config"):
+        rag_pipeline_service.service.sync_draft_workflow(
+            pipeline=_make_pipeline(),
+            graph=_make_knowledge_index_graph({"enabled": False, "graph_rag_config": {}}),
+            unique_hash=workflow.unique_hash,
+            account=_make_account(),
+            environment_variables=[],
+            conversation_variables=[],
+            rag_pipeline_variables=[],
+        )
+
+    assert workflow.graph == original_graph
+    rag_pipeline_service.session.commit.assert_not_called()

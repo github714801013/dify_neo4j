@@ -37,7 +37,15 @@ from core.plugin.impl.model_runtime_factory import create_plugin_provider_manage
 from core.rag.datasource.vdb.vector_type import VectorType
 from core.rag.extractor.entity.datasource_type import DatasourceType
 from core.rag.extractor.entity.extract_setting import ExtractSetting, NotionInfo, WebsiteInfo
-from core.rag.graph.entities import GraphExtractModelConfig, GraphQueryMode, GraphRagConfigInput
+from core.rag.graph.entities import (
+    DEFAULT_DOCUMENT_GRAPH_SCHEMA,
+    GraphExtractionConfig,
+    GraphExtractModelConfig,
+    GraphQueryMode,
+    GraphRagConfigInput,
+    GraphRetrievalConfig,
+    GraphSchema,
+)
 from core.rag.index_processor.constant.index_type import IndexTechniqueType
 from core.rag.retrieval.retrieval_methods import RetrievalMethod
 from extensions.ext_database import db
@@ -80,41 +88,127 @@ def _validate_doc_form(value: str | None) -> str | None:
     return value
 
 
-def _get_graph_rag_config(
+def _get_dataset_graph_config(
     tenant_id: str,
     dataset_id: str,
     session: Session | None = None,
-) -> dict[str, Any]:
-    # 优先复用调用方传入的 session（如 @with_session 包裹的写接口事务），
-    # 避免在已开启的事务上下文里使用 db.session 并触发
-    # "Can't operate on closed transaction" 错误。
+) -> DatasetGraphConfig | None:
+    """读取数据集图配置记录，并复用调用方事务会话。"""
     active_session = session if session is not None else db.session
-    config = active_session.scalar(
+    return active_session.scalar(
         select(DatasetGraphConfig).where(
             DatasetGraphConfig.tenant_id == tenant_id,
             DatasetGraphConfig.dataset_id == dataset_id,
         )
     )
+
+
+def _get_graph_retrieval_config(
+    tenant_id: str,
+    dataset_id: str,
+    session: Session | None = None,
+) -> dict[str, Any]:
+    """返回独立的图检索运行配置，不暴露图谱抽取字段。"""
+    config = _get_dataset_graph_config(tenant_id, dataset_id, session=session)
     if config is None:
-        return {
-            "enabled": False,
-            "query_mode": GraphQueryMode.HYBRID,
-            "graph_top_k": 10,
-            "graph_max_depth": 1,
-            "graph_timeout_ms": 1500,
-            "graph_weight": 0.3,
-            "extract_model_config": None,
-            "graph_version": "v1",
-        }
+        return GraphRetrievalConfig().model_dump(mode="json")
+    return GraphRetrievalConfig(
+        enabled=config.enabled,
+        query_mode=config.query_mode,
+        graph_top_k=config.graph_top_k,
+        graph_max_depth=config.graph_max_depth,
+        graph_timeout_ms=config.graph_timeout_ms,
+        graph_weight=config.graph_weight,
+    ).model_dump(mode="json")
+
+
+def _get_graph_extraction_config(
+    tenant_id: str,
+    dataset_id: str,
+    session: Session | None = None,
+) -> dict[str, Any]:
+    """返回图谱抽取配置；首次读取预填可编辑的文档默认 Schema。"""
+    config = _get_dataset_graph_config(tenant_id, dataset_id, session=session)
+    if config is None:
+        return GraphExtractionConfig(
+            enabled=False,
+            schema=DEFAULT_DOCUMENT_GRAPH_SCHEMA,
+        ).model_dump(mode="json")
+
+    if config.extract_model_config is None and config.index_enabled is None:
+        schema = DEFAULT_DOCUMENT_GRAPH_SCHEMA
+    else:
+        schema = GraphSchema.model_validate(config.schema_json)
     return {
-        "enabled": config.enabled,
-        "query_mode": config.query_mode,
-        "graph_top_k": config.graph_top_k,
-        "graph_max_depth": config.graph_max_depth,
-        "graph_timeout_ms": config.graph_timeout_ms,
-        "graph_weight": config.graph_weight,
+        "enabled": config.is_graph_indexing_enabled,
+        "schema": schema.model_dump(mode="json"),
         "extract_model_config": config.extract_model_config,
-        "graph_version": config.graph_version,
+        "graph_version": config.graph_version if config.is_graph_indexing_enabled else None,
+    }
+
+
+def _save_graph_retrieval_config(
+    tenant_id: str,
+    dataset_id: str,
+    values: dict[str, Any],
+    session: Session | None = None,
+) -> None:
+    """保存图检索运行参数，不改变图谱抽取开关、Schema 或模型。"""
+    active_session = session if session is not None else db.session
+    merged_values = {**_get_graph_retrieval_config(tenant_id, dataset_id, session=active_session), **values}
+    validated = GraphRetrievalConfig.model_validate(merged_values)
+    config = _get_dataset_graph_config(tenant_id, dataset_id, session=active_session)
+    if config is None:
+        config = DatasetGraphConfig(tenant_id=tenant_id, dataset_id=dataset_id)
+    for field_name, value in validated.model_dump(mode="json").items():
+        setattr(config, field_name, value)
+    active_session.add(config)
+    if session is None:
+        db.session.commit()
+
+
+def _save_graph_extraction_config(
+    tenant_id: str,
+    dataset_id: str,
+    values: dict[str, Any],
+    session: Session | None = None,
+) -> None:
+    """保存图谱抽取草稿或启用配置，并由服务端计算图谱版本。"""
+    active_session = session if session is not None else db.session
+    merged_values = {**_get_graph_extraction_config(tenant_id, dataset_id, session=active_session), **values}
+    validated = GraphExtractionConfig.model_validate(
+        {key: value for key, value in merged_values.items() if key != "graph_version"}
+    )
+    config = _get_dataset_graph_config(tenant_id, dataset_id, session=active_session)
+    if config is None:
+        config = DatasetGraphConfig(tenant_id=tenant_id, dataset_id=dataset_id)
+    config.index_enabled = validated.enabled
+    config.schema_json = (
+        validated.schema.model_dump(mode="json")
+        if validated.schema is not None
+        else DEFAULT_DOCUMENT_GRAPH_SCHEMA.model_dump(mode="json")
+    )
+    config.extract_model_config = (
+        validated.extract_model_config.model_dump(mode="json") if validated.extract_model_config is not None else None
+    )
+    config.graph_version = validated.graph_version or "v1"
+    active_session.add(config)
+    if session is None:
+        db.session.commit()
+
+
+def _get_graph_rag_config(
+    tenant_id: str,
+    dataset_id: str,
+    session: Session | None = None,
+) -> dict[str, Any]:
+    """返回旧 GraphRAG 混合字段，供尚未迁移的客户端兼容读取。"""
+    retrieval_config = _get_graph_retrieval_config(tenant_id, dataset_id, session=session)
+    extraction_config = _get_graph_extraction_config(tenant_id, dataset_id, session=session)
+    return {
+        **retrieval_config,
+        "extract_model_config": extraction_config["extract_model_config"],
+        "graph_version": extraction_config["graph_version"] or "v1",
     }
 
 
@@ -124,28 +218,18 @@ def _save_graph_rag_config(
     values: dict[str, Any],
     session: Session | None = None,
 ) -> None:
-    # DatasetService.update_dataset 内部会自行提交事务，因此默认的 GraphRAG 配置写入
-    # 使用独立 scoped session，保持各自的事务生命周期。
-    active_session = session if session is not None else db.session
-    merged_values = {**_get_graph_rag_config(tenant_id, dataset_id, session=session), **values}
-    validated = GraphRagConfigInput.model_validate(
-        {key: value for key, value in merged_values.items() if key != "graph_version"}
-    )
-    config = active_session.scalar(
-        select(DatasetGraphConfig).where(
-            DatasetGraphConfig.tenant_id == tenant_id,
-            DatasetGraphConfig.dataset_id == dataset_id,
-        )
-    )
-    if config is None:
-        config = DatasetGraphConfig(tenant_id=tenant_id, dataset_id=dataset_id)
-    for field_name, value in validated.model_dump(mode="json").items():
-        setattr(config, field_name, value)
-    config.graph_version = merged_values.get("graph_version", "v1")
-    active_session.add(config)
-    # 无显式 session 时回退到 db.session，需自行提交以保证落库。
-    if session is None:
-        db.session.commit()
+    """兼容保存旧 GraphRAG 混合字段；新客户端应分别使用两类配置。"""
+    retrieval_field_names = set(GraphRetrievalConfig.model_fields)
+    extraction_field_names = {"extract_model_config", "graph_version"}
+    retrieval_values = {key: value for key, value in values.items() if key in retrieval_field_names}
+    extraction_values = {key: value for key, value in values.items() if key in extraction_field_names}
+    if "enabled" in values:
+        extraction_values["enabled"] = values["enabled"]
+
+    if retrieval_values:
+        _save_graph_retrieval_config(tenant_id, dataset_id, retrieval_values, session=session)
+    if extraction_values:
+        _save_graph_extraction_config(tenant_id, dataset_id, extraction_values, session=session)
 
 
 class DatasetCreatePayload(BaseModel):
@@ -183,6 +267,30 @@ class GraphRagConfigPayload(BaseModel):
     graph_version: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class GraphRetrievalConfigPayload(BaseModel):
+    """数据集图检索配置的部分更新载荷。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool | None = None
+    query_mode: GraphQueryMode | None = None
+    graph_top_k: int | None = Field(default=None, ge=1, le=100)
+    graph_max_depth: int | None = Field(default=None, ge=1, le=5)
+    graph_timeout_ms: int | None = Field(default=None, ge=100, le=30_000)
+    graph_weight: float | None = Field(default=None, ge=0, le=1)
+
+
+class GraphExtractionConfigPayload(BaseModel):
+    """数据集图谱抽取配置的部分更新载荷。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool | None = None
+    schema: GraphSchema | None = None
+    extract_model_config: GraphExtractModelConfig | None = None
+    graph_version: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class DatasetUpdatePayload(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=40)
     description: str | None = Field(None, max_length=400)
@@ -200,6 +308,8 @@ class DatasetUpdatePayload(BaseModel):
     is_multimodal: bool | None = False
     graph_rag_enabled: bool | None = None
     graph_rag_config: GraphRagConfigPayload | None = None
+    graph_retrieval_config: GraphRetrievalConfigPayload | None = None
+    graph_extraction_config: GraphExtractionConfigPayload | None = None
 
     @field_validator("indexing_technique")
     @classmethod
@@ -694,9 +804,16 @@ class DatasetApi(Resource):
         permission_keys_map = permissions.dataset.permission_keys_by_resource_ids([dataset_id_str])
         data = dump_response(DatasetDetailResponse, dataset)
         data["permission_keys"] = permission_keys_map.get(dataset_id_str, [])
-        graph_rag_config = _get_graph_rag_config(current_tenant_id, dataset_id_str)
-        data["graph_rag_enabled"] = graph_rag_config["enabled"]
-        data["graph_rag_config"] = graph_rag_config
+        graph_retrieval_config = _get_graph_retrieval_config(current_tenant_id, dataset_id_str)
+        graph_extraction_config = _get_graph_extraction_config(current_tenant_id, dataset_id_str)
+        data["graph_retrieval_config"] = graph_retrieval_config
+        data["graph_extraction_config"] = graph_extraction_config
+        data["graph_rag_enabled"] = graph_retrieval_config["enabled"]
+        data["graph_rag_config"] = {
+            **graph_retrieval_config,
+            "extract_model_config": graph_extraction_config["extract_model_config"],
+            "graph_version": graph_extraction_config["graph_version"] or "v1",
+        }
         if dataset.indexing_technique == IndexTechniqueType.HIGH_QUALITY:
             if dataset.embedding_model_provider:
                 provider_id = ModelProviderID(dataset.embedding_model_provider)
@@ -763,9 +880,26 @@ class DatasetApi(Resource):
             payload.is_multimodal = is_multimodal
         graph_rag_enabled = payload.graph_rag_enabled
         graph_rag_config = payload.graph_rag_config.model_dump(exclude_unset=True) if payload.graph_rag_config else None
+        graph_retrieval_config = (
+            payload.graph_retrieval_config.model_dump(exclude_unset=True) if payload.graph_retrieval_config else None
+        )
+        graph_extraction_config = (
+            payload.graph_extraction_config.model_dump(exclude_unset=True) if payload.graph_extraction_config else None
+        )
         payload_data = payload.model_dump(exclude_unset=True)
         payload_data.pop("graph_rag_enabled", None)
         payload_data.pop("graph_rag_config", None)
+        payload_data.pop("graph_retrieval_config", None)
+        payload_data.pop("graph_extraction_config", None)
+        if graph_rag_config is not None and (
+            graph_rag_enabled is not None or graph_retrieval_config is not None or graph_extraction_config is not None
+        ):
+            raise ValueError(
+                "graph_rag_config cannot be combined with graph_rag_enabled, graph_retrieval_config, "
+                "or graph_extraction_config"
+            )
+        if graph_rag_enabled is not None and graph_retrieval_config is not None:
+            raise ValueError("graph_rag_enabled cannot be combined with graph_retrieval_config")
         if graph_rag_config is not None or graph_rag_enabled is not None:
             candidate_graph_rag_config = graph_rag_config or {}
             if graph_rag_enabled is not None and "enabled" not in candidate_graph_rag_config:
@@ -776,6 +910,21 @@ class DatasetApi(Resource):
             }
             GraphRagConfigInput.model_validate(
                 {key: value for key, value in merged_graph_rag_config.items() if key != "graph_version"}
+            )
+        if graph_retrieval_config is not None:
+            GraphRetrievalConfig.model_validate(
+                {
+                    **_get_graph_retrieval_config(current_tenant_id, dataset_id_str),
+                    **graph_retrieval_config,
+                }
+            )
+        if graph_extraction_config is not None:
+            merged_graph_extraction_config = {
+                **_get_graph_extraction_config(current_tenant_id, dataset_id_str),
+                **graph_extraction_config,
+            }
+            GraphExtractionConfig.model_validate(
+                {key: value for key, value in merged_graph_extraction_config.items() if key != "graph_version"}
             )
         # The role of the current user in the ta table must be admin, owner, editor, or dataset_operator
         if not dify_config.RBAC_ENABLED:
@@ -793,6 +942,10 @@ class DatasetApi(Resource):
             if graph_rag_enabled is not None and "enabled" not in graph_rag_config:
                 graph_rag_config["enabled"] = graph_rag_enabled
             _save_graph_rag_config(current_tenant_id, dataset_id_str, graph_rag_config)
+        if graph_retrieval_config is not None:
+            _save_graph_retrieval_config(current_tenant_id, dataset_id_str, graph_retrieval_config)
+        if graph_extraction_config is not None:
+            _save_graph_extraction_config(current_tenant_id, dataset_id_str, graph_extraction_config)
 
         permission_keys_map = enterprise_rbac_service.RBACService.DatasetPermissions.batch_get(
             current_tenant_id,
@@ -802,9 +955,16 @@ class DatasetApi(Resource):
         )
         result_data = dump_response(DatasetDetailResponse, dataset)
         result_data["permission_keys"] = permission_keys_map.get(dataset_id_str, [])
-        graph_rag_config = _get_graph_rag_config(current_tenant_id, dataset_id_str)
-        result_data["graph_rag_enabled"] = graph_rag_config["enabled"]
-        result_data["graph_rag_config"] = graph_rag_config
+        graph_retrieval_config = _get_graph_retrieval_config(current_tenant_id, dataset_id_str)
+        graph_extraction_config = _get_graph_extraction_config(current_tenant_id, dataset_id_str)
+        result_data["graph_retrieval_config"] = graph_retrieval_config
+        result_data["graph_extraction_config"] = graph_extraction_config
+        result_data["graph_rag_enabled"] = graph_retrieval_config["enabled"]
+        result_data["graph_rag_config"] = {
+            **graph_retrieval_config,
+            "extract_model_config": graph_extraction_config["extract_model_config"],
+            "graph_version": graph_extraction_config["graph_version"] or "v1",
+        }
         tenant_id = current_tenant_id
 
         if payload.partial_member_list is not None and payload.permission == DatasetPermissionEnum.PARTIAL_TEAM:

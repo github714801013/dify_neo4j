@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "โหลดซ้ำ",
   "workflowGenerator.studioApply": "นำมาใช้",
   "workflowGenerator.studioButton": "สร้าง",
-  "workflowGenerator.title": "สร้าง {{mode}}"
+  "workflowGenerator.title": "สร้าง {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "เพิ่มคุณสมบัติความสัมพันธ์",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "ลบคุณสมบัติความสัมพันธ์",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "คุณสมบัติความสัมพันธ์"
 }

@@ -1,4 +1,11 @@
-import type { CreateDocumentReq, CustomFile, FullDocumentDetail, GraphRagConfig, ProcessRule } from '@/models/datasets'
+import type {
+  CreateDocumentReq,
+  CustomFile,
+  FullDocumentDetail,
+  GraphExtractionConfig,
+  GraphRetrievalConfig,
+  ProcessRule,
+} from '@/models/datasets'
 import type { RetrievalConfig } from '@/types/app'
 import { renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -129,21 +136,22 @@ describe('useDocumentCreation', () => {
       expect(result.current.validateParams(defaultValidationParams)).toBe(false)
     })
 
-    it('should stop creation validation when GraphRAG is enabled without an extractor model', () => {
+    it('should stop creation validation when graph extraction is enabled without an extractor model', () => {
       const { result } = renderHook(() => useDocumentCreation(defaultOptions))
       const invalid = {
         ...defaultValidationParams,
-        graphRagConfig: {
+        graphRetrievalConfig: {
           enabled: true,
           query_mode: 'hybrid' as const,
           graph_top_k: 10,
           graph_max_depth: 1,
           graph_timeout_ms: 1500,
           graph_weight: 0.3,
-          extract_model_config: null,
-          graph_version: 'v1',
-        } satisfies GraphRagConfig,
-        graphRagModelList: [],
+        } satisfies GraphRetrievalConfig,
+        graphExtractionConfig: {
+          enabled: true,
+        } satisfies GraphExtractionConfig,
+        graphExtractionModelList: [],
       }
       expect(result.current.validateParams(invalid)).toBe(false)
       expect(mocks.mutateAsync).not.toHaveBeenCalled()
@@ -206,15 +214,25 @@ describe('useDocumentCreation', () => {
         process_rule: qaProcessRule,
       }), expect.any(Object))
     })
-    it('should include GraphRAG config in the first document creation request', () => {
+    it('should include independent graph configs in the first document creation request', () => {
       const { result } = renderHook(() => useDocumentCreation(defaultOptions))
-      const graphRagConfig: GraphRagConfig = {
+      const graphRetrievalConfig: GraphRetrievalConfig = {
         enabled: true,
         query_mode: 'hybrid',
         graph_top_k: 10,
         graph_max_depth: 1,
         graph_timeout_ms: 1500,
         graph_weight: 0.3,
+      }
+      const graphExtractionConfig: GraphExtractionConfig = {
+        enabled: true,
+        schema: {
+          entity_types: ['person'],
+          relation_types: ['related_to'],
+          allowed_triples: [['person', 'related_to', 'person']],
+          entity_properties: {},
+          relation_properties: {},
+        },
         extract_model_config: {
           provider: 'openai',
           model: 'gpt-4o-mini',
@@ -222,7 +240,6 @@ describe('useDocumentCreation', () => {
           max_triplets_per_chunk: 10,
           strict: true,
         },
-        graph_version: 'v1',
       }
       const params = result.current.buildCreationParams(
         ChunkingMode.text,
@@ -232,10 +249,13 @@ describe('useDocumentCreation', () => {
         { provider: 'openai', model: 'text-embedding-3-small' },
         'high_quality',
         undefined,
-        graphRagConfig,
+        graphRetrievalConfig,
+        graphExtractionConfig,
       )
 
-      expect(params?.graph_rag_config).toEqual(graphRagConfig)
+      expect(params?.graph_retrieval_config).toEqual(graphRetrievalConfig)
+      expect(params?.graph_extraction_config).toEqual(graphExtractionConfig)
+      expect(params).not.toHaveProperty('graph_rag_config')
     })
 
     it('should build params for isSetting mode', () => {

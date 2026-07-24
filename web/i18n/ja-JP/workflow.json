@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "リロード",
   "workflowGenerator.studioApply": "申し込む",
   "workflowGenerator.studioButton": "生成する",
-  "workflowGenerator.title": "{{mode}} を生成する"
+  "workflowGenerator.title": "{{mode}} を生成する",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "関係属性を追加",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "関係属性を削除",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "関係属性"
 }

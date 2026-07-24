@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "पुनः लोड करें",
   "workflowGenerator.studioApply": "ऐसा लगता है कि",
   "workflowGenerator.studioButton": "उत्पन्न करें",
-  "workflowGenerator.title": "{{mode}} उत्पन्न करें"
+  "workflowGenerator.title": "{{mode}} उत्पन्न करें",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "संबंध गुण जोड़ें",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "संबंध गुण हटाएं",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "संबंध गुण"
 }

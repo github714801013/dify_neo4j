@@ -45,7 +45,7 @@ def analyze_graph_query(
     *,
     tenant_id: str,
     query: str,
-    model_config: GraphExtractModelConfig,
+    model_config: GraphExtractModelConfig | None,
     schema: GraphSchema,
     limit: int,
 ) -> GraphQuery | None:
@@ -55,20 +55,21 @@ def analyze_graph_query(
         return None
 
     payload: Mapping[str, object] = {}
-    try:
-        payload = _invoke_query_model(
-            tenant_id=tenant_id,
-            query=normalized_query,
-            model_config=model_config,
-            schema=schema,
-        )
-    except Exception as ex:
-        logger.warning(
-            "graph query analyzer model failed tenant=%s model=%s err=%s",
-            tenant_id,
-            model_config.model,
-            ex,
-        )
+    if model_config is not None:
+        try:
+            payload = _invoke_query_model(
+                tenant_id=tenant_id,
+                query=normalized_query,
+                model_config=model_config,
+                schema=schema,
+            )
+        except Exception as ex:
+            logger.warning(
+                "graph query analyzer model failed tenant=%s model=%s err=%s",
+                tenant_id,
+                model_config.model,
+                ex,
+            )
 
     graph_query = _query_from_payload(payload, schema=schema, limit=limit)
     if graph_query is not None:
@@ -90,7 +91,7 @@ def _invoke_query_model(
     *,
     tenant_id: str,
     query: str,
-    model_config: GraphExtractModelConfig,
+    model_config: GraphExtractModelConfig | None,
     schema: GraphSchema,
 ) -> Mapping[str, object]:
     user_prompt = (

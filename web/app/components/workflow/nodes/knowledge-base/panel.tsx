@@ -1,6 +1,11 @@
 import type { FC } from 'react'
-import type { KnowledgeBaseNodeType } from './types'
+import type {
+  GraphIndexConfig as GraphIndexConfigValue,
+  GraphIndexSchema,
+  KnowledgeBaseNodeType,
+} from './types'
 import type { NodePanelProps, Var } from '@/app/components/workflow/types'
+import type { GraphExtractionConfig, GraphSchema } from '@/models/datasets'
 import { useQuery } from '@tanstack/react-query'
 import {
   memo,
@@ -21,6 +26,7 @@ import {
 } from '@/app/components/workflow/nodes/_base/components/layout'
 import VarReferencePicker from '@/app/components/workflow/nodes/_base/components/variable/var-reference-picker'
 import { IS_CE_EDITION } from '@/config'
+import { useDatasetDetailContextWithSelector } from '@/context/dataset-detail'
 import { consoleQuery } from '@/service/client'
 import Split from '../_base/components/split'
 import ChunkStructure from './components/chunk-structure'
@@ -39,12 +45,46 @@ import {
   KnowledgeBaseValidationIssueCode,
 } from './utils'
 
+const toGraphIndexSchema = (schema?: GraphSchema): GraphIndexSchema | undefined => {
+  if (!schema)
+    return undefined
+
+  return {
+    entity_types: schema.entity_types.map(name => ({
+      name,
+      properties: schema.entity_properties[name] ?? [],
+    })),
+    relation_types: schema.relation_types.map(name => ({
+      name,
+      properties: schema.relation_properties[name] ?? [],
+    })),
+    allowed_triples: schema.allowed_triples.map(([source_type, relation_type, target_type]) => ({
+      source_type,
+      relation_type,
+      target_type,
+    })),
+  }
+}
+
+const toGraphIndexTemplate = (config?: GraphExtractionConfig): GraphIndexConfigValue | undefined => {
+  if (!config?.schema && !config?.extract_model_config)
+    return undefined
+
+  return {
+    enabled: config.enabled,
+    schema: toGraphIndexSchema(config.schema),
+    extract_model_config: config.extract_model_config,
+    graph_version: config.graph_version,
+  }
+}
+
 const Panel: FC<NodePanelProps<KnowledgeBaseNodeType>> = ({
   id,
   data,
 }) => {
   const { t } = useTranslation()
   const { nodesReadOnly } = useNodesReadOnly()
+  const datasetGraphExtractionConfig = useDatasetDetailContextWithSelector(state => state.dataset?.graph_extraction_config)
   const { data: embeddingModelList } = useModelList(ModelTypeEnum.textEmbedding)
   const { data: rerankModelList } = useModelList(ModelTypeEnum.rerank)
   const chunkStructure = data.chunk_structure
@@ -176,6 +216,10 @@ const Panel: FC<NodePanelProps<KnowledgeBaseNodeType>> = ({
   const chunkStructureWarning = validationIssue?.code === KnowledgeBaseValidationIssueCode.chunkStructureRequired
   const chunksInputWarning = validationIssue?.code === KnowledgeBaseValidationIssueCode.chunksVariableRequired
   const embeddingModelWarning = indexingTechnique === IndexMethodEnum.QUALIFIED && embeddingModelStatus !== 'active'
+  const graphIndexTemplate = useMemo(
+    () => toGraphIndexTemplate(datasetGraphExtractionConfig),
+    [datasetGraphExtractionConfig],
+  )
 
   return (
     <div>
@@ -244,6 +288,7 @@ const Panel: FC<NodePanelProps<KnowledgeBaseNodeType>> = ({
                 </div>
                 <GraphIndexConfig
                   config={data.graph_index_config}
+                  templateConfig={graphIndexTemplate}
                   onChange={handleGraphIndexConfigChange}
                   readonly={nodesReadOnly}
                 />

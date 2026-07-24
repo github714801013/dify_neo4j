@@ -1,0 +1,119 @@
+schema_version: 1
+orchestrator_version: 1
+revision: 10
+task_id: 2026-07-24-graphrag-extraction-schema-config
+task:
+  title: GraphRAG 图谱抽取 Schema 默认值与知识库配置
+  source: 用户需求：二次开发；文档图谱索引启用前配置模型、实体类型、关系类型和允许三元组，并在知识库设置 GraphRAG 中支持默认值与配置。
+route: general-requirement-with-upstream-fork-compatibility
+route_history: []
+stages:
+- id: grill-with-docs
+  skill: grill-with-docs
+  status: complete
+  required_files:
+  - path: D:/workplace/python/dify/docs/engineering/specs/2026-07-16-graphrag-raw-requirements.md
+    sha256: 98afcc587da9109ca65c3b86e11de5f4be78f9dc7289f88a9006af6b264f8c2b
+  - path: D:/workplace/python/dify/docs/engineering/specs/2026-07-23-knowledge-base-graph-attribute-config-spec.md
+    sha256: e53362bd07069b273f41fdb4e361b48b7ecb7dae18dcd68e7a070132baf9ec69
+  - path: D:/workplace/skills/my-skills/dev-spec-gen/references/upstream-fork-development.md
+    sha256: da3bbe185962d280e52c38fd958481427dc30b1761de521e38f4cb6763020245
+  - path: C:/Users/Administrator/.agents/skills/grill-with-docs/SKILL.md
+    sha256: f5794611a427256227610e4f57b79c55e498ab79b8aec1de6a40cb0f794ab5e1
+  output_files:
+  - path: D:/workplace/python/dify/docs/adr/0002-decouple-graphrag-retrieval-and-extraction-lifecycle.md
+    sha256: ceb035596ea3eaf57ca8509672ac0a5bce527e605d37e3ed16162991e012ad68
+  - path: D:/workplace/python/dify/docs/engineering/specs/2026-07-24-graphrag-extraction-schema-config-decisions.md
+    sha256: 6670c6b7099111d736ee95731c1af80ee9d1d4e01396dba5815c149057d12a09
+  handoff_summary: 已完成图检索与图谱抽取解耦、模板快照、默认 Schema、启用校验、范围隔离、立即清理旧图数据、最新配置优先重建和按范围降级等决策，并落盘
+    ADR 与决策记录。
+  evidence:
+  - kind: verification
+    summary: 用户于 2026-07-24 确认全部关键决策；git diff --check 针对两份正式文档通过。
+    recorded_at: '2026-07-24T06:35:07+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: '2026-07-24T06:35:07+00:00'
+- id: to-spec
+  skill: to-spec
+  status: complete
+  required_files: []
+  output_files:
+  - path: D:/workplace/python/dify/docs/engineering/specs/2026-07-24-graphrag-extraction-schema-config-spec.md
+    sha256: ca62fddb72a708396f3fbce65c0ebe97ee7576245587056d929effe348d14dd4
+  handoff_summary: 已生成 GraphRAG 图谱抽取 Schema 默认值与知识库配置正式规格；外部 issue tracker 未配置，本地规格为正式状态源。
+  evidence:
+  - kind: verification
+    summary: 已核验数据集 GraphRAG 配置、Knowledge Base 节点 Schema、图索引 Reconciler/范围隔离及后端 pytest、前端
+      Vitest 切入点；规格所需章节、关键术语和行尾空白检查通过。
+    recorded_at: '2026-07-24T06:48:15+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: '2026-07-24T06:48:15+00:00'
+- id: to-tickets
+  skill: to-tickets
+  status: complete
+  required_files: []
+  output_files: []
+  handoff_summary: 已按正式规格拆分为 7 张可独立验证的本地 tracer-bullet tickets，明确了配置契约、数据集默认模板、节点快照、范围化重建、就绪范围检索、模型保护和失败隔离的阻塞边。外部
+    issue tracker 未配置，已按本地 ticket 模板发布。
+  evidence: &id001
+  - kind: verification
+    summary: 已逐张核验 7 个 ticket 的编号、模板字段、ready-for-agent 状态、验收条件和行尾空白；编排状态 schema 校验通过。
+    recorded_at: '2026-07-24T06:58:00+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: '2026-07-24T06:58:00+00:00'
+- id: tdd-implement
+  skill: tdd + implement
+  status: in_progress
+  required_files: []
+  output_files: []
+  handoff_summary: ''
+  evidence: []
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: null
+- id: code-review
+  skill: code-review
+  status: pending
+  required_files: []
+  output_files: []
+  handoff_summary: ''
+  evidence: []
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: null
+- id: verification
+  skill: 验证
+  status: pending
+  required_files: []
+  output_files: []
+  handoff_summary: ''
+  evidence: []
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: null
+current_stage: tdd-implement
+current_skill: tdd + implement
+stage_status: in_progress
+next_skill: tdd + implement
+resume_from: stage:tdd-implement
+continuation_mode: auto
+required_action: null
+handoff_summary: 已进入阶段 tdd-implement，当前技能为 tdd + implement。
+evidence: *id001
+blocked_reason: null
+failure_evidence: []
+invalidated_outputs: []
+limits:
+  handoff_summary_max_chars: 1200
+  evidence_summary_max_chars: 500
+  max_inline_evidence_items: 20
+updated_at: '2026-07-24T06:59:46+00:00'

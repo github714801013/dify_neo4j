@@ -239,6 +239,77 @@ describe('useFormState', () => {
       expect(result.current.canEditSettings).toBe(false)
       expect('isCurrentWorkspaceDatasetOperator' in result.current).toBe(false)
     })
+
+    it('should prefer independent graph retrieval and extraction configs from the dataset', () => {
+      mockDataset = {
+        ...createDefaultMockDataset(),
+        graph_retrieval_config: {
+          enabled: true,
+          query_mode: 'vector',
+          graph_top_k: 8,
+          graph_max_depth: 2,
+          graph_timeout_ms: 2000,
+          graph_weight: 0.4,
+        },
+        graph_extraction_config: {
+          enabled: true,
+          schema: {
+            entity_types: ['person'],
+            relation_types: ['related_to'],
+            allowed_triples: [['person', 'related_to', 'person']],
+            entity_properties: {},
+            relation_properties: {},
+          },
+          extract_model_config: {
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            temperature: 0,
+            max_triplets_per_chunk: 10,
+            strict: true,
+          },
+        },
+      }
+
+      const { result } = renderHook(() => useFormState())
+
+      expect(result.current.graphRetrievalConfig).toEqual(mockDataset.graph_retrieval_config)
+      expect(result.current.graphExtractionConfig).toMatchObject(mockDataset.graph_extraction_config!)
+    })
+
+    it('should initialize independent configs from the legacy mixed config', () => {
+      mockDataset = {
+        ...createDefaultMockDataset(),
+        graph_rag_config: {
+          enabled: true,
+          query_mode: 'vector',
+          graph_top_k: 8,
+          graph_max_depth: 2,
+          graph_timeout_ms: 2000,
+          graph_weight: 0.4,
+          extract_model_config: {
+            provider: 'openai',
+            model: 'gpt-4o-mini',
+            temperature: 0,
+            max_triplets_per_chunk: 10,
+            strict: true,
+          },
+          graph_version: 'v1',
+        },
+      }
+
+      const { result } = renderHook(() => useFormState())
+
+      expect(result.current.graphRetrievalConfig).toMatchObject({
+        enabled: true,
+        query_mode: 'vector',
+        graph_top_k: 8,
+      })
+      expect(result.current.graphExtractionConfig).toMatchObject({
+        enabled: true,
+        extract_model_config: mockDataset.graph_rag_config!.extract_model_config,
+        graph_version: 'v1',
+      })
+    })
   })
 
   describe('State Setters', () => {
@@ -525,6 +596,47 @@ describe('useFormState', () => {
           permission: DatasetPermission.onlyMe,
         }),
       })
+    })
+
+    it('should save independent graph configs without sending the legacy mixed field', async () => {
+      const { updateDatasetSetting } = await import('@/service/datasets')
+      const { result } = renderHook(() => useFormState())
+
+      await act(async () => {
+        await result.current.handleSave()
+      })
+
+      const body = vi.mocked(updateDatasetSetting).mock.calls[0]?.[0].body
+      expect(body).toMatchObject({
+        graph_retrieval_config: result.current.graphRetrievalConfig,
+        graph_extraction_config: result.current.graphExtractionConfig,
+      })
+      expect(body).not.toHaveProperty('graph_rag_config')
+    })
+
+    it('should block saving an enabled graph extraction config without a model', async () => {
+      const { updateDatasetSetting } = await import('@/service/datasets')
+      const { result } = renderHook(() => useFormState())
+
+      act(() => {
+        result.current.setGraphExtractionConfig({
+          enabled: true,
+          schema: {
+            entity_types: ['person'],
+            relation_types: ['related_to'],
+            allowed_triples: [['person', 'related_to', 'person']],
+            entity_properties: {},
+            relation_properties: {},
+          },
+        })
+      })
+
+      await act(async () => {
+        await result.current.handleSave()
+      })
+
+      expect(updateDatasetSetting).not.toHaveBeenCalled()
+      expect(mockToastError).toHaveBeenCalled()
     })
 
     it('should not save when dataset only has readonly ACL permission', async () => {

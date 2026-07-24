@@ -80,6 +80,10 @@ export type GraphIndexConfig = {
   extract_model_config?: {
     provider: string
     model: string
+    temperature?: number
+    max_tokens?: number
+    max_triplets_per_chunk?: number
+    strict?: boolean
   }
   graph_version?: string
 }

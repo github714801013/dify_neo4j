@@ -58,6 +58,37 @@ export type GraphExtractModelConfig = {
   strict: boolean
 }
 
+export type GraphPropertyDefinition = {
+  name: string
+  description: string
+  value_type: 'string' | 'number' | 'boolean' | 'date'
+  required: boolean
+}
+
+export type GraphSchema = {
+  entity_types: string[]
+  relation_types: string[]
+  allowed_triples: Array<[string, string, string]>
+  entity_properties: Record<string, GraphPropertyDefinition[]>
+  relation_properties: Record<string, GraphPropertyDefinition[]>
+}
+
+export type GraphRetrievalConfig = {
+  enabled: boolean
+  query_mode: 'vector' | 'hybrid'
+  graph_top_k: number
+  graph_max_depth: number
+  graph_timeout_ms: number
+  graph_weight: number
+}
+
+export type GraphExtractionConfig = {
+  enabled: boolean
+  schema?: GraphSchema
+  extract_model_config?: GraphExtractModelConfig
+  graph_version?: string
+}
+
 export type GraphRagConfig = {
   enabled: boolean
   query_mode: 'vector' | 'hybrid'
@@ -121,6 +152,8 @@ export type DataSet = {
   permission_keys?: string[]
   graph_rag_enabled?: boolean
   graph_rag_config?: GraphRagConfig
+  graph_retrieval_config?: GraphRetrievalConfig
+  graph_extraction_config?: GraphExtractionConfig
 }
 
 export type ExternalAPIItem = {
@@ -475,6 +508,8 @@ export type CreateDocumentReq = DocumentReq & {
   embedding_model: string
   embedding_model_provider: string
   graph_rag_config?: GraphRagConfig
+  graph_retrieval_config?: GraphRetrievalConfig
+  graph_extraction_config?: GraphExtractionConfig
 }
 
 export type IndexingEstimateParams = DocumentReq & Partial<DataSource> & {

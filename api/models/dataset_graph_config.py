@@ -27,6 +27,8 @@ class DatasetGraphConfig(DefaultFieldsDCMixin, TypeBase):
     tenant_id: Mapped[str] = mapped_column(StringUUID, nullable=False)
     dataset_id: Mapped[str] = mapped_column(StringUUID, nullable=False)
     enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False, server_default=sa.text("false"))
+    # NULL only appears on rows created before extraction and retrieval were decoupled.
+    index_enabled: Mapped[bool | None] = mapped_column(sa.Boolean, nullable=True, default=None)
     query_mode: Mapped[GraphQueryMode] = mapped_column(
         EnumText(GraphQueryMode, length=32),
         nullable=False,
@@ -50,3 +52,10 @@ class DatasetGraphConfig(DefaultFieldsDCMixin, TypeBase):
     graph_version: Mapped[str] = mapped_column(
         sa.String(64), nullable=False, default="v1", server_default=sa.text("'v1'")
     )
+
+    @property
+    def is_graph_indexing_enabled(self) -> bool:
+        """返回是否应执行图谱抽取，并兼容历史混合配置。"""
+        if self.index_enabled is not None:
+            return self.index_enabled
+        return self.enabled and self.extract_model_config is not None

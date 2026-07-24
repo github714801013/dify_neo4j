@@ -2,13 +2,16 @@
 
 import type { FC } from 'react'
 import type { StepTwoProps } from './types'
-import type { GraphRagConfig } from '@/models/datasets'
+import type { GraphExtractionConfig, GraphRetrievalConfig } from '@/models/datasets'
 import { cn } from '@langgenius/dify-ui/cn'
 import { toast } from '@langgenius/dify-ui/toast'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import Divider from '@/app/components/base/divider'
-import { DEFAULT_GRAPH_RAG_CONFIG } from '@/app/components/datasets/graph-rag/constants'
+import {
+  DEFAULT_GRAPH_EXTRACTION_CONFIG,
+  DEFAULT_GRAPH_RETRIEVAL_CONFIG,
+} from '@/app/components/datasets/graph-rag/constants'
 import { GraphRagSettings } from '@/app/components/datasets/graph-rag/graph-rag-settings'
 import { ModelTypeEnum } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import { useModelList } from '@/app/components/header/account-setting/model-provider-page/hooks'
@@ -68,7 +71,8 @@ const StepTwo: FC<StepTwoProps> = ({
   const [docLanguage, setDocLanguage] = useState<string>(() => (datasetId && documentDetail) ? documentDetail.doc_language : (locale !== LanguagesSupported[1] ? 'English' : 'Chinese Simplified'))
   const [isQAConfirmDialogOpen, setIsQAConfirmDialogOpen] = useState(false)
   const currentDocForm = currentDataset?.doc_form || docForm
-  const [graphRagConfig, setGraphRagConfig] = useState<GraphRagConfig>(() => currentDataset?.graph_rag_config ?? { ...DEFAULT_GRAPH_RAG_CONFIG })
+  const [graphRetrievalConfig, setGraphRetrievalConfig] = useState<GraphRetrievalConfig>(() => currentDataset?.graph_retrieval_config ?? { ...DEFAULT_GRAPH_RETRIEVAL_CONFIG })
+  const [graphExtractionConfig, setGraphExtractionConfig] = useState<GraphExtractionConfig>(() => currentDataset?.graph_extraction_config ?? { ...DEFAULT_GRAPH_EXTRACTION_CONFIG })
   const { data: textGenerationModelList } = useModelList(ModelTypeEnum.textGeneration)
 
   // Custom hooks
@@ -168,16 +172,27 @@ const StepTwo: FC<StepTwoProps> = ({
       embeddingModel: indexing.embeddingModel,
       rerankModelList: indexing.rerankModelList,
       retrievalConfig: indexing.retrievalConfig,
-      graphRagConfig,
-      graphRagModelList: textGenerationModelList,
+      graphRetrievalConfig,
+      graphExtractionConfig,
+      graphExtractionModelList: textGenerationModelList,
     })
     if (!isValid)
       return
-    const params = creation.buildCreationParams(currentDocForm, docLanguage, segmentation.getProcessRule(currentDocForm), indexing.retrievalConfig, indexing.embeddingModel, indexing.getIndexingTechnique(), segmentation.summaryIndexSetting, graphRagConfig)
+    const params = creation.buildCreationParams(
+      currentDocForm,
+      docLanguage,
+      segmentation.getProcessRule(currentDocForm),
+      indexing.retrievalConfig,
+      indexing.embeddingModel,
+      indexing.getIndexingTechnique(),
+      segmentation.summaryIndexSetting,
+      graphRetrievalConfig,
+      graphExtractionConfig,
+    )
     if (!params)
       return
     await creation.executeCreation(params, indexing.indexType, indexing.retrievalConfig)
-  }, [canCreateDocument, creation, segmentation, indexing, currentDocForm, docLanguage, graphRagConfig, textGenerationModelList])
+  }, [canCreateDocument, creation, segmentation, indexing, currentDocForm, docLanguage, graphRetrievalConfig, graphExtractionConfig, textGenerationModelList])
 
   const handlePickerChange = useCallback((selected: { id: string, name: string }) => {
     estimateHook.reset()
@@ -283,9 +298,10 @@ const StepTwo: FC<StepTwoProps> = ({
         />
         {!datasetId && (
           <GraphRagSettings
-            config={graphRagConfig}
-            modelList={textGenerationModelList}
-            onChange={setGraphRagConfig}
+            retrievalConfig={graphRetrievalConfig}
+            extractionConfig={graphExtractionConfig}
+            onRetrievalConfigChange={setGraphRetrievalConfig}
+            onExtractionConfigChange={setGraphExtractionConfig}
           />
         )}
         <StepTwoFooter isSetting={isSetting} isCreating={creation.isCreating} onPrevious={() => onStepChange?.(-1)} onCreate={handleCreate} onCancel={onCancel} />

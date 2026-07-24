@@ -338,7 +338,7 @@ def _load_index_input(job: GraphIndexJobRequest) -> _IndexInput | None:
                     DatasetGraphConfig.dataset_id == job.dataset_id,
                 )
             )
-            if config is None or not config.enabled or config.extract_model_config is None:
+            if config is None or not config.is_graph_indexing_enabled or config.extract_model_config is None:
                 return None
             schema = GraphSchema.model_validate(config.schema_json)
             extract_model = GraphExtractModelConfig.model_validate(config.extract_model_config)

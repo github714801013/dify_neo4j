@@ -1,5 +1,6 @@
 """Unit tests for DocumentService behaviors in dataset_service."""
 
+from core.rag.graph.entities import GraphExtractionConfig, GraphExtractModelConfig, GraphRetrievalConfig, GraphSchema
 from services.dataset_ref_service import DatasetRef
 
 from .dataset_service_test_helpers import (
@@ -371,6 +372,69 @@ class TestDocumentServiceSaveDocumentWithoutDatasetId:
 
         assert created_dataset.retrieval_model == retrieval_model.model_dump()
         assert created_dataset.collection_binding_id is None
+
+    def test_save_document_without_dataset_id_persists_independent_graph_configs(self, account_context):
+        graph_retrieval_config = GraphRetrievalConfig(
+            enabled=False,
+            query_mode="vector",
+            graph_top_k=8,
+            graph_max_depth=2,
+            graph_timeout_ms=2000,
+            graph_weight=0.4,
+        )
+        graph_extraction_config = GraphExtractionConfig(
+            enabled=True,
+            schema=GraphSchema(
+                entity_types=["person"],
+                relation_types=["related_to"],
+                allowed_triples=[("person", "related_to", "person")],
+            ),
+            extract_model_config=GraphExtractModelConfig(
+                provider="openai",
+                model="gpt-4o-mini",
+            ),
+        )
+        knowledge_config = KnowledgeConfig(
+            indexing_technique="economy",
+            data_source=DataSource(
+                info_list=InfoList(
+                    data_source_type="upload_file",
+                    file_info_list=FileInfo(file_ids=["file-1"]),
+                )
+            ),
+            graph_retrieval_config=graph_retrieval_config,
+            graph_extraction_config=graph_extraction_config,
+        )
+        created_dataset = SimpleNamespace(id="dataset-1", tenant_id="tenant-1", name="", description=None)
+
+        with (
+            patch("services.dataset_service.FeatureService.get_features", return_value=_make_features(enabled=False)),
+            patch(
+                "services.dataset_service.Dataset",
+                side_effect=lambda **kwargs: created_dataset.__dict__.update(kwargs) or created_dataset,
+            ),
+            patch("services.dataset_service.DatasetGraphConfig") as dataset_graph_config_cls,
+            patch.object(
+                DocumentService,
+                "save_document_with_dataset_id",
+                return_value=([SimpleNamespace(name="Doc")], "batch-1"),
+            ),
+            patch("services.dataset_service.db") as mock_db,
+        ):
+            DocumentService.save_document_without_dataset_id(
+                "tenant-1",
+                knowledge_config,
+                account_context,
+                mock_db.session,
+            )
+
+        graph_config_kwargs = dataset_graph_config_cls.call_args.kwargs
+        assert graph_config_kwargs["enabled"] is False
+        assert graph_config_kwargs["index_enabled"] is True
+        assert graph_config_kwargs["query_mode"] == "vector"
+        assert graph_config_kwargs["graph_top_k"] == 8
+        assert graph_config_kwargs["schema_json"]["entity_types"] == ["person"]
+        assert graph_config_kwargs["extract_model_config"]["model"] == "gpt-4o-mini"
 
     def test_save_document_without_dataset_id_rejects_sandbox_batch_upload(self, account_context):
         knowledge_config = KnowledgeConfig(

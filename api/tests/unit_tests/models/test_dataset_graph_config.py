@@ -1,5 +1,7 @@
 from uuid import uuid4
 
+import pytest
+
 from configs.feature import GraphRAGConfig
 from core.rag.graph.entities import GraphQueryMode
 from models.dataset_graph_config import DatasetGraphConfig
@@ -65,3 +67,30 @@ class TestGraphRAGConfig:
         assert config.NEO4J_USERNAME == "graph_user"
         assert config.NEO4J_PASSWORD == "graph_password"
         assert config.NEO4J_DATABASE == "graph_database"
+
+
+@pytest.mark.parametrize(
+    ("index_enabled", "legacy_enabled", "extract_model_config", "expected"),
+    [
+        (None, True, {"provider": "openai", "model": "gpt-4.1-mini"}, True),
+        (None, True, None, False),
+        (False, True, {"provider": "openai", "model": "gpt-4.1-mini"}, False),
+        (True, False, None, True),
+    ],
+)
+def test_graph_indexing_enabled_supports_explicit_and_legacy_configs(
+    index_enabled: bool | None,
+    legacy_enabled: bool,
+    extract_model_config: dict[str, str] | None,
+    expected: bool,
+) -> None:
+    """新版抽取开关优先，历史记录继续沿用旧的启用语义。"""
+    config = DatasetGraphConfig(
+        tenant_id=str(uuid4()),
+        dataset_id=str(uuid4()),
+        enabled=legacy_enabled,
+        index_enabled=index_enabled,
+        extract_model_config=extract_model_config,
+    )
+
+    assert config.is_graph_indexing_enabled is expected

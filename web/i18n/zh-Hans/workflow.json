@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "重新加载",
   "workflowGenerator.studioApply": "应用",
   "workflowGenerator.studioButton": "生成",
-  "workflowGenerator.title": "生成 {{mode}}"
+  "workflowGenerator.title": "生成 {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "添加关系属性",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "删除关系属性",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "关系属性"
 }

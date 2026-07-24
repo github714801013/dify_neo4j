@@ -4,6 +4,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from core.rag.graph.entities import GraphQuery, GraphQueryMode, GraphResult
 from core.rag.graph_indexing.entities import GraphIndexJobStatus
@@ -240,3 +241,34 @@ def test_reader_failure_propagates_when_fail_open_disabled(db_session):
                 dataset_id=dataset_id,
                 query="Dify",
             )
+
+
+def test_service_retrieves_existing_graph_when_extraction_is_disabled(db_session):
+    """图检索不能依赖图谱抽取开关或抽取模型。"""
+    from core.rag.graph_retrieval import service as module
+
+    tenant_id, dataset_id, _document, segment, _source_version = _seed_graph_dataset(db_session)
+    config = db_session.scalar(
+        select(DatasetGraphConfig).where(DatasetGraphConfig.dataset_id == dataset_id)
+    )
+    assert config is not None
+    config.index_enabled = False
+    config.extract_model_config = None
+    db_session.flush()
+
+    graph_query = GraphQuery(entity_names=["Dify"], limit=5)
+    graph_result = GraphResult(segment_id=segment.id, graph_rank=1, graph_distance=1)
+    with (
+        patch.object(module.dify_config, "GRAPH_RAG_ENABLED", True),
+        patch.object(module, "analyze_graph_query", return_value=graph_query) as analyzer,
+        patch.object(module, "read_graph_results", return_value=[graph_result]),
+    ):
+        batch = retrieve_graph_documents(
+            session=db_session,
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            query="Dify",
+        )
+
+    assert [document.page_content for document in batch.documents] == [segment.content]
+    assert analyzer.call_args.kwargs["model_config"] is None

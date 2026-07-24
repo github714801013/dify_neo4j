@@ -1,5 +1,9 @@
 import type { Model } from '@/app/components/header/account-setting/model-provider-page/declarations'
-import type { GraphRagConfig } from '@/models/datasets'
+import type {
+  GraphExtractionConfig,
+  GraphRagConfig,
+  GraphRetrievalConfig,
+} from '@/models/datasets'
 import { ModelStatusEnum } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import { GRAPH_RAG_LIMITS } from './constants'
 
@@ -10,9 +14,8 @@ export type GraphRagConfigValidationError = 'extract_model_required'
   | 'invalid_triplets'
   | 'invalid_max_tokens'
 
-export const validateGraphRagConfig = (
-  config: GraphRagConfig,
-  modelList: Model[],
+export const validateGraphRetrievalConfig = (
+  config: GraphRetrievalConfig,
 ): GraphRagConfigValidationError | undefined => {
   if (config.graph_top_k < GRAPH_RAG_LIMITS.graphTopK.min || config.graph_top_k > GRAPH_RAG_LIMITS.graphTopK.max)
     return 'invalid_graph_limits'
@@ -22,17 +25,24 @@ export const validateGraphRagConfig = (
     return 'invalid_graph_limits'
   if (config.graph_weight < GRAPH_RAG_LIMITS.graphWeight.min || config.graph_weight > GRAPH_RAG_LIMITS.graphWeight.max)
     return 'invalid_graph_limits'
+  return undefined
+}
+
+export const validateGraphExtractionConfig = (
+  config: GraphExtractionConfig,
+  modelList: Model[],
+): GraphRagConfigValidationError | undefined => {
+  if (!config.enabled)
+    return undefined
 
   const extractor = config.extract_model_config
-  if (config.enabled && (!extractor?.provider?.trim() || !extractor.model?.trim()))
+  if (!extractor?.provider?.trim() || !extractor.model?.trim())
     return 'extract_model_required'
-  if (!extractor)
-    return undefined
   if (extractor.temperature < GRAPH_RAG_LIMITS.temperature.min || extractor.temperature > GRAPH_RAG_LIMITS.temperature.max)
     return 'invalid_temperature'
   if (extractor.max_triplets_per_chunk < GRAPH_RAG_LIMITS.maxTripletsPerChunk.min || extractor.max_triplets_per_chunk > GRAPH_RAG_LIMITS.maxTripletsPerChunk.max)
     return 'invalid_triplets'
-  if (extractor.max_tokens !== undefined && extractor.max_tokens !== null && (extractor.max_tokens < GRAPH_RAG_LIMITS.maxTokens.min || extractor.max_tokens > GRAPH_RAG_LIMITS.maxTokens.max))
+  if (extractor.max_tokens !== undefined && (extractor.max_tokens < GRAPH_RAG_LIMITS.maxTokens.min || extractor.max_tokens > GRAPH_RAG_LIMITS.maxTokens.max))
     return 'invalid_max_tokens'
   if (modelList.length > 0) {
     const provider = modelList.find(item => item.provider === extractor.provider)
@@ -41,4 +51,23 @@ export const validateGraphRagConfig = (
       return 'extract_model_unavailable'
   }
   return undefined
+}
+
+export const validateGraphRagConfig = (
+  config: GraphRagConfig,
+  modelList: Model[],
+): GraphRagConfigValidationError | undefined => {
+  const retrievalError = validateGraphRetrievalConfig(config)
+  if (retrievalError)
+    return retrievalError
+
+  const extractionConfig = {
+    enabled: config.enabled,
+    extract_model_config: config.extract_model_config ?? undefined,
+  }
+  const extractionError = validateGraphExtractionConfig(extractionConfig, modelList)
+  if (extractionError || !config.extract_model_config)
+    return extractionError
+
+  return validateGraphExtractionConfig({ ...extractionConfig, enabled: true }, modelList)
 }

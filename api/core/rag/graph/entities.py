@@ -4,6 +4,9 @@
 LLM 调用属于后续基础设施适配层。
 """
 
+import hashlib
+import json
+import operator
 from enum import StrEnum
 from typing import Literal
 
@@ -75,6 +78,19 @@ class GraphExtractModelConfig(BaseModel):
         return value
 
 
+class GraphRetrievalConfig(BaseModel):
+    """Dataset 级图检索运行配置，不承载图谱抽取或索引参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool = False
+    query_mode: GraphQueryMode = GraphQueryMode.HYBRID
+    graph_top_k: int = Field(default=10, ge=1, le=100)
+    graph_max_depth: int = Field(default=1, ge=1, le=5)
+    graph_timeout_ms: int = Field(default=1500, ge=100, le=30_000)
+    graph_weight: float = Field(default=0.3, ge=0, le=1)
+
+
 class GraphRagConfigInput(BaseModel):
     """创建 Dataset 时使用的 GraphRAG 配置输入。"""
 
@@ -131,6 +147,7 @@ class GraphSchema(BaseModel):
     relation_types: list[str] = Field(min_length=1)
     allowed_triples: list[tuple[str, str, str]] = Field(min_length=1)
     entity_properties: dict[str, list[GraphPropertyDefinition]] = Field(default_factory=dict)
+    relation_properties: dict[str, list[GraphPropertyDefinition]] = Field(default_factory=dict)
 
     @field_validator("entity_types", "relation_types")
     @classmethod
@@ -157,6 +174,12 @@ class GraphSchema(BaseModel):
             property_names = [item.name for item in properties]
             if len(property_names) != len(set(property_names)):
                 raise ValueError("graph schema property names must not contain duplicates")
+        for relation_type, properties in self.relation_properties.items():
+            if relation_type not in declared_relations:
+                raise ValueError("relation_properties must only reference declared relation_types")
+            property_names = [item.name for item in properties]
+            if len(property_names) != len(set(property_names)):
+                raise ValueError("graph schema property names must not contain duplicates")
         return self
 
     @classmethod
@@ -171,6 +194,74 @@ DEFAULT_GRAPH_SCHEMA = GraphSchema(
     relation_types=list(DEFAULT_RELATION_TYPES),
     allowed_triples=list(DEFAULT_ALLOWED_TRIPLES),
 )
+
+DEFAULT_DOCUMENT_ENTITY_TYPES = ("person", "organization", "location", "event", "concept")
+DEFAULT_DOCUMENT_RELATION_TYPES = ("works_for", "located_in", "participates_in", "related_to")
+DEFAULT_DOCUMENT_ALLOWED_TRIPLES = (
+    ("person", "works_for", "organization"),
+    ("person", "located_in", "location"),
+    ("organization", "located_in", "location"),
+    ("person", "participates_in", "event"),
+    ("organization", "participates_in", "event"),
+    ("organization", "related_to", "organization"),
+    ("concept", "related_to", "concept"),
+)
+
+DEFAULT_DOCUMENT_GRAPH_SCHEMA = GraphSchema(
+    entity_types=list(DEFAULT_DOCUMENT_ENTITY_TYPES),
+    relation_types=list(DEFAULT_DOCUMENT_RELATION_TYPES),
+    allowed_triples=list(DEFAULT_DOCUMENT_ALLOWED_TRIPLES),
+)
+
+
+def compute_graph_extraction_version(schema: GraphSchema, extract_model_config: GraphExtractModelConfig) -> str:
+    """为数据集级图谱抽取配置计算与展示排序无关的稳定版本。"""
+
+    payload = {
+        "schema": {
+            "entity_types": sorted(schema.entity_types),
+            "relation_types": sorted(schema.relation_types),
+            "allowed_triples": sorted(schema.allowed_triples),
+            "entity_properties": {
+                entity_type: sorted(
+                    (property_definition.model_dump(mode="json") for property_definition in properties),
+                    key=operator.itemgetter("name"),
+                )
+                for entity_type, properties in sorted(schema.entity_properties.items())
+            },
+            "relation_properties": {
+                relation_type: sorted(
+                    (property_definition.model_dump(mode="json") for property_definition in properties),
+                    key=operator.itemgetter("name"),
+                )
+                for relation_type, properties in sorted(schema.relation_properties.items())
+            },
+        },
+        "extract_model_config": extract_model_config.model_dump(mode="json"),
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+class GraphExtractionConfig(BaseModel):
+    """数据集级图谱抽取/索引配置，允许在未启用时保存不完整草稿。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: StrictBool = False
+    schema: GraphSchema | None = None
+    extract_model_config: GraphExtractModelConfig | None = None
+    graph_version: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def require_complete_enabled_configuration(self) -> "GraphExtractionConfig":
+        if not self.enabled:
+            self.graph_version = None
+            return self
+        if self.schema is None or self.extract_model_config is None:
+            raise ValueError("schema and extract_model_config are required when graph indexing is enabled")
+        self.graph_version = compute_graph_extraction_version(self.schema, self.extract_model_config)
+        return self
 
 
 class GraphQuery(BaseModel):

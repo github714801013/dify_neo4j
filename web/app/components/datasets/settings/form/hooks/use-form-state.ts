@@ -2,15 +2,27 @@
 import type { AppIconSelection } from '@/app/components/base/app-icon-picker'
 import type { DefaultModel } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import type { Member } from '@/models/common'
-import type { GraphRagConfig, IconInfo, SummaryIndexSetting as SummaryIndexSettingType } from '@/models/datasets'
+import type {
+  DataSet,
+  GraphExtractionConfig,
+  GraphRetrievalConfig,
+  IconInfo,
+  SummaryIndexSetting as SummaryIndexSettingType,
+} from '@/models/datasets'
 import type { RetrievalConfig } from '@/types/app'
 import { toast } from '@langgenius/dify-ui/toast'
 import { useAtomValue } from 'jotai'
 import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { isReRankModelSelected } from '@/app/components/datasets/common/check-rerank-model'
-import { DEFAULT_GRAPH_RAG_CONFIG } from '@/app/components/datasets/graph-rag/constants'
-import { validateGraphRagConfig } from '@/app/components/datasets/graph-rag/validation'
+import {
+  DEFAULT_GRAPH_EXTRACTION_CONFIG,
+  DEFAULT_GRAPH_RETRIEVAL_CONFIG,
+} from '@/app/components/datasets/graph-rag/constants'
+import {
+  validateGraphExtractionConfig,
+  validateGraphRetrievalConfig,
+} from '@/app/components/datasets/graph-rag/validation'
 import { ModelTypeEnum } from '@/app/components/header/account-setting/model-provider-page/declarations'
 import { useModelList } from '@/app/components/header/account-setting/model-provider-page/hooks'
 import { userProfileIdAtom } from '@/context/account-state'
@@ -28,6 +40,42 @@ const DEFAULT_APP_ICON: IconInfo = {
   icon: '📙',
   icon_background: '#FFF4ED',
   icon_url: '',
+}
+
+const getGraphRetrievalConfig = (dataset?: DataSet): GraphRetrievalConfig => {
+  if (dataset?.graph_retrieval_config)
+    return dataset.graph_retrieval_config
+
+  const legacyConfig = dataset?.graph_rag_config
+  return {
+    ...DEFAULT_GRAPH_RETRIEVAL_CONFIG,
+    enabled: legacyConfig?.enabled ?? dataset?.graph_rag_enabled ?? false,
+    query_mode: legacyConfig?.query_mode ?? DEFAULT_GRAPH_RETRIEVAL_CONFIG.query_mode,
+    graph_top_k: legacyConfig?.graph_top_k ?? DEFAULT_GRAPH_RETRIEVAL_CONFIG.graph_top_k,
+    graph_max_depth: legacyConfig?.graph_max_depth ?? DEFAULT_GRAPH_RETRIEVAL_CONFIG.graph_max_depth,
+    graph_timeout_ms: legacyConfig?.graph_timeout_ms ?? DEFAULT_GRAPH_RETRIEVAL_CONFIG.graph_timeout_ms,
+    graph_weight: legacyConfig?.graph_weight ?? DEFAULT_GRAPH_RETRIEVAL_CONFIG.graph_weight,
+  }
+}
+
+const getGraphExtractionConfig = (dataset?: DataSet): GraphExtractionConfig => {
+  if (dataset?.graph_extraction_config) {
+    return {
+      ...DEFAULT_GRAPH_EXTRACTION_CONFIG,
+      ...dataset.graph_extraction_config,
+      schema: dataset.graph_extraction_config.schema ?? DEFAULT_GRAPH_EXTRACTION_CONFIG.schema,
+      extract_model_config: dataset.graph_extraction_config.extract_model_config
+        ?? DEFAULT_GRAPH_EXTRACTION_CONFIG.extract_model_config,
+    }
+  }
+
+  const legacyConfig = dataset?.graph_rag_config
+  return {
+    ...DEFAULT_GRAPH_EXTRACTION_CONFIG,
+    enabled: Boolean(legacyConfig?.enabled && legacyConfig.extract_model_config),
+    extract_model_config: legacyConfig?.extract_model_config ?? DEFAULT_GRAPH_EXTRACTION_CONFIG.extract_model_config,
+    graph_version: legacyConfig?.graph_version,
+  }
 }
 
 export const useFormState = () => {
@@ -82,12 +130,8 @@ export const useFormState = () => {
 
   // Summary index state
   const [summaryIndexSetting, setSummaryIndexSetting] = useState(currentDataset?.summary_index_setting)
-  const [graphRagConfig, setGraphRagConfig] = useState<GraphRagConfig>(
-    currentDataset?.graph_rag_config ?? {
-      ...DEFAULT_GRAPH_RAG_CONFIG,
-      enabled: currentDataset?.graph_rag_enabled ?? false,
-    },
-  )
+  const [graphRetrievalConfig, setGraphRetrievalConfig] = useState<GraphRetrievalConfig>(() => getGraphRetrievalConfig(currentDataset ?? undefined))
+  const [graphExtractionConfig, setGraphExtractionConfig] = useState<GraphExtractionConfig>(() => getGraphExtractionConfig(currentDataset ?? undefined))
 
   // Model lists
   const { data: rerankModelList } = useModelList(ModelTypeEnum.rerank)
@@ -149,9 +193,10 @@ export const useFormState = () => {
       return
     }
 
-    const graphRagValidationError = validateGraphRagConfig(graphRagConfig, textGenerationModelList)
-    if (graphRagValidationError) {
-      toast.error(t(`form.graphRag.${graphRagValidationError}`, { ns: 'datasetSettings' }))
+    const graphValidationError = validateGraphRetrievalConfig(graphRetrievalConfig)
+      ?? validateGraphExtractionConfig(graphExtractionConfig, textGenerationModelList)
+    if (graphValidationError) {
+      toast.error(t(`form.graphRag.${graphValidationError}`, { ns: 'datasetSettings' }))
       return
     }
 
@@ -177,7 +222,8 @@ export const useFormState = () => {
         embedding_model_provider: embeddingModel.provider,
         keyword_number: keywordNumber,
         summary_index_setting: summaryIndexSetting,
-        graph_rag_config: graphRagConfig,
+        graph_retrieval_config: graphRetrievalConfig,
+        graph_extraction_config: graphExtractionConfig,
       }
 
       if (currentDataset!.provider === 'external') {
@@ -274,13 +320,14 @@ export const useFormState = () => {
     embeddingModel,
     setEmbeddingModel,
     embeddingModelList,
-    textGenerationModelList,
 
     // Summary index
     summaryIndexSetting,
     handleSummaryIndexSettingChange,
-    graphRagConfig,
-    setGraphRagConfig,
+    graphRetrievalConfig,
+    setGraphRetrievalConfig,
+    graphExtractionConfig,
+    setGraphExtractionConfig,
 
     // Computed
     showMultiModalTip,

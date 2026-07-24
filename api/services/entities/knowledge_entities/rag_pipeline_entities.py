@@ -1,9 +1,11 @@
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from core.rag.entities import KeywordSetting, VectorSetting
 from core.rag.retrieval.retrieval_methods import RetrievalMethod
+from core.workflow.nodes.knowledge_index.entities import GraphIndexConfig
 
 
 class RerankingModelConfig(BaseModel):
@@ -74,6 +76,15 @@ class KnowledgeConfiguration(BaseModel):
     retrieval_model: RetrievalSetting
     # add summary index setting
     summary_index_setting: dict[str, object] | None = None
+    graph_index_config: GraphIndexConfig | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_graph_rag_config_alias(cls, data: Any) -> Any:
+        """拒绝节点 DSL 的旧图检索别名，防止导入和发布绕过节点契约。"""
+        if isinstance(data, Mapping) and "graph_rag_config" in data:
+            raise ValueError("graph_rag_config is not supported; use graph_index_config")
+        return data
 
     @field_validator("embedding_model_provider", "embedding_model", mode="before")
     @classmethod

@@ -98,6 +98,7 @@ def test_load_index_input_scopes_segments_by_tenant_dataset_and_document():
         statements.append(str(statement))
         or SimpleNamespace(
             enabled=True,
+            is_graph_indexing_enabled=True,
             schema_json=GraphSchema.default().model_dump(mode="json"),
             extract_model_config=GraphExtractModelConfig(provider="provider", model="model").model_dump(mode="json"),
         )
@@ -117,6 +118,29 @@ def test_load_index_input_scopes_segments_by_tenant_dataset_and_document():
     assert "document_segments.tenant_id" in segment_statement
     assert "document_segments.dataset_id" in segment_statement
     assert "document_segments.document_id" in segment_statement
+
+
+def test_load_index_input_skips_explicitly_disabled_dataset_graph_indexing():
+    """新抽取开关关闭时不为普通文档加载图谱抽取输入。"""
+    from core.rag.graph_indexing import indexer as module
+
+    session = MagicMock()
+    session.__enter__.return_value = session
+    session.scalar.return_value = SimpleNamespace(
+        enabled=True,
+        is_graph_indexing_enabled=False,
+        schema_json=GraphSchema.default().model_dump(mode="json"),
+        extract_model_config=GraphExtractModelConfig(provider="provider", model="model").model_dump(mode="json"),
+    )
+
+    with (
+        patch.object(module, "Session", return_value=session),
+        patch.object(module, "db", SimpleNamespace(engine=object())),
+    ):
+        result = module._load_index_input(_job())
+
+    assert result is None
+    session.scalars.assert_not_called()
 
 
 def test_load_index_input_includes_entity_properties_for_published_node_scope():

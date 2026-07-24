@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "Reîncărcați",
   "workflowGenerator.studioApply": "Aplicați",
   "workflowGenerator.studioButton": "Generați",
-  "workflowGenerator.title": "Generați {{mode}}"
+  "workflowGenerator.title": "Generați {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "Adăugați proprietate relație",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "Ștergeți proprietatea relației",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "Proprietăți relație"
 }

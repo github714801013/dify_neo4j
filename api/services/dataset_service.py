@@ -21,6 +21,7 @@ from core.errors.error import LLMBadRequestError, ProviderTokenNotInitError
 from core.helper.name_generator import generate_incremental_name
 from core.model_manager import ModelManager
 from core.rag.entities import QAGeneration
+from core.rag.graph.entities import DEFAULT_DOCUMENT_GRAPH_SCHEMA, GraphExtractionConfig, GraphRetrievalConfig
 from core.rag.index_processor.constant.built_in_field import BuiltInField
 from core.rag.index_processor.constant.index_type import IndexStructureType, IndexTechniqueType
 from core.rag.retrieval.retrieval_methods import RetrievalMethod
@@ -3005,21 +3006,58 @@ class DocumentService:
         session.add(dataset)
         session.flush()
 
-        if knowledge_config.graph_rag_config is not None:
+        if knowledge_config.graph_retrieval_config is not None or knowledge_config.graph_extraction_config is not None:
+            retrieval_config = knowledge_config.graph_retrieval_config or GraphRetrievalConfig()
+            extraction_config = knowledge_config.graph_extraction_config or GraphExtractionConfig()
+            session.add(
+                DatasetGraphConfig(
+                    tenant_id=tenant_id,
+                    dataset_id=dataset.id,
+                    enabled=retrieval_config.enabled,
+                    index_enabled=extraction_config.enabled,
+                    query_mode=retrieval_config.query_mode,
+                    graph_top_k=retrieval_config.graph_top_k,
+                    graph_max_depth=retrieval_config.graph_max_depth,
+                    graph_timeout_ms=retrieval_config.graph_timeout_ms,
+                    graph_weight=retrieval_config.graph_weight,
+                    schema_json=(
+                        extraction_config.schema.model_dump(mode="json")
+                        if extraction_config.schema is not None
+                        else DEFAULT_DOCUMENT_GRAPH_SCHEMA.model_dump(mode="json")
+                    ),
+                    extract_model_config=extraction_config.extract_model_config.model_dump(mode="json")
+                    if extraction_config.extract_model_config
+                    else None,
+                    graph_version=extraction_config.graph_version or "v1",
+                )
+            )
+        elif knowledge_config.graph_rag_config is not None:
             graph_config = knowledge_config.graph_rag_config
-            db.session.add(
+            extraction_config = GraphExtractionConfig(
+                enabled=graph_config.enabled,
+                schema=DEFAULT_DOCUMENT_GRAPH_SCHEMA if graph_config.extract_model_config is not None else None,
+                extract_model_config=graph_config.extract_model_config,
+            )
+            session.add(
                 DatasetGraphConfig(
                     tenant_id=tenant_id,
                     dataset_id=dataset.id,
                     enabled=graph_config.enabled,
+                    index_enabled=extraction_config.enabled,
                     query_mode=graph_config.query_mode,
                     graph_top_k=graph_config.graph_top_k,
                     graph_max_depth=graph_config.graph_max_depth,
                     graph_timeout_ms=graph_config.graph_timeout_ms,
                     graph_weight=graph_config.graph_weight,
+                    schema_json=(
+                        extraction_config.schema.model_dump(mode="json")
+                        if extraction_config.schema is not None
+                        else DEFAULT_DOCUMENT_GRAPH_SCHEMA.model_dump(mode="json")
+                    ),
                     extract_model_config=graph_config.extract_model_config.model_dump(mode="json")
                     if graph_config.extract_model_config
                     else None,
+                    graph_version=extraction_config.graph_version or "v1",
                 )
             )
 

@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "Yeniden yükle",
   "workflowGenerator.studioApply": "Uygula",
   "workflowGenerator.studioButton": "Oluştur",
-  "workflowGenerator.title": "{{mode}} oluştur"
+  "workflowGenerator.title": "{{mode}} oluştur",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "İlişki özelliği ekle",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "İlişki özelliğini sil",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "İlişki özellikleri"
 }

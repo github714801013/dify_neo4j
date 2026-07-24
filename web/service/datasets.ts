@@ -54,7 +54,7 @@ export const updateDatasetSetting = ({
   body,
 }: {
   datasetId: string
-  body: Partial<Pick<DataSet, 'name' | 'description' | 'permission' | 'partial_member_list' | 'indexing_technique' | 'retrieval_model' | 'embedding_model' | 'embedding_model_provider' | 'icon_info' | 'doc_form' | 'graph_rag_enabled' | 'graph_rag_config'>>
+  body: Partial<Pick<DataSet, 'name' | 'description' | 'permission' | 'partial_member_list' | 'indexing_technique' | 'retrieval_model' | 'embedding_model' | 'embedding_model_provider' | 'icon_info' | 'doc_form' | 'graph_rag_enabled' | 'graph_rag_config' | 'graph_retrieval_config' | 'graph_extraction_config'>>
 }): Promise<DataSet> => {
   return patch<DataSet>(`/datasets/${datasetId}`, { body })
 }

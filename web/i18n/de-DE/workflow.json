@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "Neu laden",
   "workflowGenerator.studioApply": "Bewerben",
   "workflowGenerator.studioButton": "Generieren",
-  "workflowGenerator.title": "Generieren Sie {{mode}}"
+  "workflowGenerator.title": "Generieren Sie {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "Beziehungseigenschaft hinzufügen",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "Beziehungseigenschaft löschen",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "Beziehungseigenschaften"
 }

@@ -44,6 +44,14 @@ vi.mock('@langgenius/dify-ui/switch', () => ({
   ),
 }))
 
+vi.mock('@/app/components/base/param-item', () => ({
+  default: ({ id, name, value, onChange, disabled }: { id: string, name: string, value: number, onChange: (id: string, value: number) => void, disabled?: boolean }) => (
+    <button disabled={disabled} aria-label={name} onClick={() => onChange(id, value + 0.1)}>
+      {name}
+    </button>
+  ),
+}))
+
 vi.mock('@langgenius/dify-ui/select', () => ({
   Select: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   SelectContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -67,6 +75,10 @@ const completeConfig = {
   extract_model_config: {
     provider: 'openai',
     model: 'gpt-4.1-mini',
+    temperature: 0,
+    max_tokens: undefined,
+    max_triplets_per_chunk: 10,
+    strict: true,
   },
 }
 
@@ -85,6 +97,16 @@ describe('GraphIndexConfig', () => {
 
     expect(onChange).not.toHaveBeenCalled()
     expect(screen.getByRole('status')).toHaveTextContent('nodes.knowledgeBase.graphIndex.incomplete')
+  })
+
+  it('initializes a newly enabled node from the dataset extraction template', () => {
+    const onChange = vi.fn()
+
+    render(<GraphIndexConfig templateConfig={completeConfig} onChange={onChange} />)
+
+    fireEvent.click(screen.getByRole('checkbox'))
+
+    expect(onChange).toHaveBeenLastCalledWith(completeConfig)
   })
 
   it('persists only the complete graph index contract without model credentials or runtime retrieval options', () => {
@@ -112,6 +134,10 @@ describe('GraphIndexConfig', () => {
       extract_model_config: {
         provider: 'openai',
         model: 'gpt-4.1-mini',
+        temperature: 0,
+        max_tokens: undefined,
+        max_triplets_per_chunk: 10,
+        strict: true,
       },
     })
     expect(onChange.mock.calls.flat()).not.toContain('langgenius/openai')
@@ -167,6 +193,76 @@ describe('GraphIndexConfig', () => {
             required: false,
           }],
         }],
+      },
+    })
+  })
+
+  it('persists configured relation properties when they are edited', () => {
+    const onChange = vi.fn()
+    const config = {
+      ...completeConfig,
+      schema: {
+        ...completeConfig.schema,
+        relation_types: [{
+          name: 'CONTAINS',
+          properties: [{
+            name: 'source',
+            description: 'Where the relation was extracted from.',
+            value_type: 'string' as const,
+            required: false,
+          }],
+        }],
+      },
+    }
+
+    render(<GraphIndexConfig config={config} onChange={onChange} />)
+
+    expect(screen.getByDisplayValue('source')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('Where the relation was extracted from.')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('nodes.knowledgeBase.graphIndex.propertyDescription'), {
+      target: { value: 'The document source of this relation.' },
+    })
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...completeConfig,
+      schema: {
+        ...completeConfig.schema,
+        relation_types: [{
+          name: 'CONTAINS',
+          properties: [{
+            name: 'source',
+            description: 'The document source of this relation.',
+            value_type: 'string',
+            required: false,
+          }],
+        }],
+      },
+    })
+  })
+
+  it('persists configured extraction parameters when they are changed', () => {
+    const onChange = vi.fn()
+    const config = {
+      ...completeConfig,
+      extract_model_config: {
+        ...completeConfig.extract_model_config,
+        temperature: 0.3,
+        max_tokens: 2048,
+        max_triplets_per_chunk: 12,
+        strict: false,
+      },
+    }
+
+    render(<GraphIndexConfig config={config} onChange={onChange} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'form.graphRag.temperature' }))
+
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...config,
+      extract_model_config: {
+        ...config.extract_model_config,
+        temperature: 0.4,
       },
     })
   })

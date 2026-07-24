@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "Muat ulang",
   "workflowGenerator.studioApply": "Terapkan",
   "workflowGenerator.studioButton": "Hasilkan",
-  "workflowGenerator.title": "Hasilkan {{mode}}"
+  "workflowGenerator.title": "Hasilkan {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "Tambahkan properti relasi",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "Hapus properti relasi",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "Properti relasi"
 }

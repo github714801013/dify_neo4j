@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "Перезавантажити",
   "workflowGenerator.studioApply": "Застосувати",
   "workflowGenerator.studioButton": "Генерувати",
-  "workflowGenerator.title": "Створити {{mode}}"
+  "workflowGenerator.title": "Створити {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "Додати властивість зв’язку",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "Видалити властивість зв’язку",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "Властивості зв’язку"
 }

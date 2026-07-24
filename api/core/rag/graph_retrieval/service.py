@@ -79,12 +79,7 @@ def retrieve_graph_documents(
             DatasetGraphConfig.dataset_id == dataset_id,
         )
     )
-    if (
-        config is None
-        or not config.enabled
-        or config.query_mode != GraphQueryMode.HYBRID
-        or config.extract_model_config is None
-    ):
+    if config is None or not config.enabled or config.query_mode != GraphQueryMode.HYBRID:
         return GraphRetrievalBatch(documents=[], graph_weight=0)
 
     graph_weight = float(config.graph_weight)
@@ -101,7 +96,11 @@ def retrieve_graph_documents(
             return GraphRetrievalBatch(documents=[], graph_weight=graph_weight)
 
         schema = GraphSchema.model_validate(config.schema_json)
-        model_config = GraphExtractModelConfig.model_validate(config.extract_model_config)
+        model_config = (
+            GraphExtractModelConfig.model_validate(config.extract_model_config)
+            if config.extract_model_config is not None
+            else None
+        )
         graph_query = analyze_graph_query(
             tenant_id=tenant_id,
             query=query,

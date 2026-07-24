@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "إعادة تحميل",
   "workflowGenerator.studioApply": "تطبيق",
   "workflowGenerator.studioButton": "إنشاء",
-  "workflowGenerator.title": "إنشاء {{mode}}"
+  "workflowGenerator.title": "إنشاء {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "إضافة خاصية العلاقة",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "حذف خاصية العلاقة",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "خصائص العلاقة"
 }

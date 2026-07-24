@@ -1395,5 +1395,8 @@
   "workflowGenerator.reload": "Ricarica",
   "workflowGenerator.studioApply": "Applicare",
   "workflowGenerator.studioButton": "Genera",
-  "workflowGenerator.title": "Genera {{mode}}"
+  "workflowGenerator.title": "Genera {{mode}}",
+  "nodes.knowledgeBase.graphIndex.addRelationProperty": "Aggiungi proprietà della relazione",
+  "nodes.knowledgeBase.graphIndex.deleteRelationProperty": "Elimina proprietà della relazione",
+  "nodes.knowledgeBase.graphIndex.relationProperties": "Proprietà della relazione"
 }

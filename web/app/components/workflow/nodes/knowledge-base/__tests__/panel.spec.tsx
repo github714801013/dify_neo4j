@@ -14,6 +14,7 @@ const mockGraphIndexConfig = vi.hoisted(() => vi.fn(() => <div data-testid="grap
 const mockHandleGraphIndexConfigChange = vi.hoisted(() => vi.fn())
 const mockSummaryIndexSetting = vi.hoisted(() => vi.fn(() => <div data-testid="summary-index-setting" />))
 const mockQueryOptions = vi.hoisted(() => vi.fn((options: unknown) => options))
+const mockDataset = vi.hoisted(() => ({ current: undefined as Record<string, unknown> | undefined }))
 
 vi.mock('@tanstack/react-query', () => ({
   useQuery: mockUseQuery,
@@ -43,6 +44,12 @@ vi.mock('@/app/components/header/account-setting/model-provider-page/hooks', () 
 
 vi.mock('@/app/components/workflow/hooks', () => ({
   useNodesReadOnly: () => ({ nodesReadOnly: false }),
+}))
+
+vi.mock('@/context/dataset-detail', () => ({
+  useDatasetDetailContextWithSelector: (selector: (state: { dataset: Record<string, unknown> | undefined }) => unknown) => (
+    selector({ dataset: mockDataset.current })
+  ),
 }))
 
 vi.mock('../hooks/use-config', () => ({
@@ -152,6 +159,7 @@ const panelProps: PanelProps = {
 describe('KnowledgeBasePanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockDataset.current = undefined
     mockUseQuery.mockReturnValue({ data: undefined })
     mockUseModelList.mockImplementation((modelType: ModelTypeEnum) => {
       if (modelType === ModelTypeEnum.textEmbedding) {
@@ -219,6 +227,71 @@ describe('KnowledgeBasePanel', () => {
       config: graphIndexConfig,
       onChange: mockHandleGraphIndexConfigChange,
       readonly: false,
+    }), undefined)
+  })
+
+  it('should pass the dataset graph extraction config as the node initialization template', () => {
+    mockDataset.current = {
+      graph_extraction_config: {
+        enabled: true,
+        schema: {
+          entity_types: ['person'],
+          relation_types: ['related_to'],
+          allowed_triples: [['person', 'related_to', 'person']],
+          entity_properties: {
+            person: [{
+              name: 'name',
+              description: 'Person name',
+              value_type: 'string',
+              required: true,
+            }],
+          },
+          relation_properties: {},
+        },
+        extract_model_config: {
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          temperature: 0,
+          max_triplets_per_chunk: 10,
+          strict: true,
+        },
+      },
+    }
+
+    render(<Panel id="knowledge-base-1" data={createData({ graph_index_config: { enabled: false } }) as never} panelProps={panelProps} />)
+
+    expect(mockGraphIndexConfig).toHaveBeenCalledWith(expect.objectContaining({
+      templateConfig: {
+        enabled: true,
+        schema: {
+          entity_types: [{
+            name: 'person',
+            properties: [{
+              name: 'name',
+              description: 'Person name',
+              value_type: 'string',
+              required: true,
+            }],
+          }],
+          relation_types: [{
+            name: 'related_to',
+            properties: [],
+          }],
+          allowed_triples: [{
+            source_type: 'person',
+            relation_type: 'related_to',
+            target_type: 'person',
+          }],
+        },
+        extract_model_config: {
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+          temperature: 0,
+          max_triplets_per_chunk: 10,
+          strict: true,
+        },
+        graph_version: undefined,
+      },
     }), undefined)
   })
 })
