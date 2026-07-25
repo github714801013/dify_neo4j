@@ -127,9 +127,7 @@ def extract_with_llm(
     if not raw_text:
         raise GraphExtractionError("llm returned empty content")
 
-    payload = json_repair.loads(raw_text)
-    if not isinstance(payload, dict):
-        raise GraphExtractionError("llm output is not a json object")
+    payload = _parse_llm_payload(raw_text)
 
     return _filter_by_schema(
         payload,
@@ -137,6 +135,16 @@ def extract_with_llm(
         strict=strict,
         max_triplets_per_chunk=max_triplets_per_chunk,
     )
+
+
+def _parse_llm_payload(raw_text: str) -> dict:
+    """解析 LLM 输出，兼容被 JSON 字符串再次包裹的对象。"""
+    payload = json_repair.loads(raw_text)
+    if isinstance(payload, str):
+        payload = json_repair.loads(payload)
+    if not isinstance(payload, dict):
+        raise GraphExtractionError("llm output is not a json object")
+    return payload
 
 
 def _filter_by_schema(

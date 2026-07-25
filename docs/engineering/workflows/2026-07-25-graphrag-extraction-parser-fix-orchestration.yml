@@ -1,0 +1,190 @@
+schema_version: 3
+orchestrator_version: 3
+revision: 12
+task_id: 2026-07-25-graphrag-extraction-parser-fix
+task:
+  title: GraphRAG LLM 抽取 JSON 解析失败修复
+  source: 用户反馈：GraphRAG 图召回为零，要求按建议修复
+workspace:
+  status: confirmed
+  decision: current_workspace_current_branch
+  confirmed_at: '2026-07-25T08:13:10+00:00'
+  path: D:\workplace\python\dify
+  branch: neo4j-by-1.16.0-rc1
+  base_branch: null
+  migration: null
+route: bug-after-deployment
+route_history: []
+stages:
+- id: diagnosing-bugs
+  skill: diagnosing-bugs
+  completion_gate: null
+  status: complete
+  required_files:
+  - path: D:/workplace/python/dify/docs/engineering/specs/2026-07-25-graphrag-extraction-parser-fix-spec.md
+    sha256: 64c23c5e6deb9776d2491da66cd988f54364bc134740a0c02cd5b68dc1e94e27
+  - path: D:/workplace/skills/my-skills/dev-spec-gen/references/debugging-evidence-specs.md
+    sha256: 1296e685eade03559af8c395802b99b917c4f9d973acd2d8a35ba582a691c245
+  - path: D:/workplace/skills/my-skills/dev-spec-gen/references/loki-cli-specs.md
+    sha256: bb8fd708fdbb5058375a3f2e64d794b8fe8e5cac39df3c2545d4b09c5281ce15
+  output_files: []
+  handoff_summary: 已确认故障边界：extract_with_llm 在 json_repair.loads 后只接受 dict；线上 GraphRAG
+    Job 已记录 llm output is not a json object，目标范围只有 Segment 无 Entity/Fact。修复 seam 为抽取器文本到
+    JSON 对象的解析适配，保留非对象失败和既有 Schema 过滤。
+  evidence:
+  - kind: verification
+    summary: 原计划基线：2026-07-24 GraphRAG 规格要求图谱抽取失败不得阻断普通文本分块/索引，且抽取结果必须经 Schema 过滤。
+    recorded_at: '2026-07-25T08:13:51+00:00'
+  - kind: verification
+    summary: 线上证据：目标知识库 GraphRAG 索引失败任务重试 6 次，失败原因为 llm output is not a json object；Neo4j
+      GraphSegment=2、GraphEntity=0、GraphFact=0。
+    recorded_at: '2026-07-25T08:13:51+00:00'
+  - kind: verification
+    summary: 代码证据：api/core/rag/graph_indexing/extractor.py 的 extract_with_llm 在 json_repair.loads(raw_text)
+      后直接以 isinstance(payload, dict) 判定，数组/字符串包裹对象等结果会进入领域错误。
+    recorded_at: '2026-07-25T08:13:51+00:00'
+  - kind: verification
+    summary: 边界复现：json_repair.loads 对 JSON 数组返回 list、对 JSON 字符串包裹对象返回 str；因此当前逻辑会拒绝非
+      dict，标准对象仍保持可解析。
+    recorded_at: '2026-07-25T08:13:51+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: '2026-07-25T08:13:51+00:00'
+- id: regression-test
+  skill: tdd
+  completion_gate: tdd
+  status: complete
+  required_files:
+  - path: D:/workplace/skills/my-skills/dev-spec-gen/references/testing-specs.md
+    sha256: 600abb701d7daef7bd2faad3d9e333717047577d32349c94eefae5fffcdf2d4c
+  output_files:
+  - path: D:/workplace/python/dify/api/tests/unit_tests/core/rag/graph_indexing/test_extractor.py
+    sha256: d107ce82b6d5193bb2e11439b802c8d8bced5c61234a6d35da906b10707a1487
+  handoff_summary: 完成 TDD 回归测试：先以 JSON 字符串包裹对象复现线上失败，再以最小解析适配修复并通过定向测试。
+  evidence:
+  - kind: verification
+    summary: 命令：uv run --project api pytest api/tests/unit_tests/core/rag/graph_indexing/test_extractor.py
+      -q；结果：23 passed，1 warning。
+    recorded_at: '2026-07-25T08:31:16+00:00'
+  - kind: tdd_red
+    summary: '新增 JSON 字符串包裹对象测试在未修改 extractor.py 时失败：23 个测试中 1 个失败，错误为 GraphExtractionError:
+      llm output is not a json object。'
+    recorded_at: '2026-07-25T08:31:16+00:00'
+  - kind: tdd_green
+    summary: 实现 _parse_llm_payload 后定向抽取器测试通过：23 passed，保留数组和无效文本拒绝，并验证 Schema 过滤仍生效。
+    recorded_at: '2026-07-25T08:31:16+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: '2026-07-25T08:31:16+00:00'
+- id: minimal-fix
+  skill: tdd + implement
+  completion_gate: tdd
+  status: complete
+  required_files:
+  - path: D:/workplace/skills/my-skills/dev-spec-gen/references/workflow-guardrails.md
+    sha256: 7809000b9186b202fc2b2f8035d80493e7ebf7c2ab43ac2b13a6b7e48dc5f85b
+  - path: D:/workplace/skills/my-skills/dev-spec-gen/references/general-specs.md
+    sha256: 21a529153dc10c826882c40f803251b223346cebd4de17853c263df06c3f892b
+  output_files:
+  - path: D:/workplace/python/dify/api/core/rag/graph_indexing/extractor.py
+    sha256: 94b497fddc941fb2ea7ed32c557aa5af164f7024f17fdf910ff500d6c8e1f32b
+  - path: D:/workplace/python/dify/api/tests/unit_tests/core/rag/graph_indexing/test_extractor.py
+    sha256: d107ce82b6d5193bb2e11439b802c8d8bced5c61234a6d35da906b10707a1487
+  handoff_summary: 完成最小修复：兼容 JSON 字符串包裹的对象输出，同时保留数组、标量和无 JSON 输出的拒绝语义；Schema 过滤链路不变。
+  evidence:
+  - kind: verification
+    summary: 最小实现仅在 extractor.py 增加 _parse_llm_payload：首次解析为字符串时再解析一次，最终仍只接受 dict；未修改
+      Prompt、模型配置、Neo4j 写入、索引重试和普通文本 fail-open。
+    recorded_at: '2026-07-25T08:33:12+00:00'
+  - kind: verification
+    summary: 完整 GraphRAG 单元测试命令：uv run --project api pytest api/tests/unit_tests/core/rag/graph_indexing
+      -q；结果：109 passed，3 warnings。
+    recorded_at: '2026-07-25T08:33:12+00:00'
+  - kind: tdd_red
+    summary: '新增 JSON 字符串包裹对象测试在未修改 extractor.py 时失败：23 个测试中 1 个失败，错误为 GraphExtractionError:
+      llm output is not a json object。'
+    recorded_at: '2026-07-25T08:33:12+00:00'
+  - kind: tdd_green
+    summary: 实现 _parse_llm_payload 后定向测试通过：23 passed，数组和无效文本仍被拒绝，Schema 过滤仍生效。
+    recorded_at: '2026-07-25T08:33:12+00:00'
+  blocked_reason: TDD 完成闸门要求 Red 与 Green 证据，或完整授权例外
+  failure_evidence:
+  - TDD 完成闸门要求 Red 与 Green 证据，或完整授权例外
+  required_action: null
+  confirmed_at: '2026-07-25T08:33:12+00:00'
+- id: code-review
+  skill: code-review
+  completion_gate: null
+  status: complete
+  required_files: []
+  output_files: []
+  handoff_summary: 完成代码与规格双轴审查：未发现阻断问题，变更范围最小且与线上故障 seam 对齐。
+  evidence:
+  - kind: verification
+    summary: 规范审查：diff 仅修改 extractor.py 与对应单元测试；新增解析 helper 与既有 json_repair、GraphExtractionError、Schema
+      过滤契约一致，无 SQL、路由、数据模型或公共配置变更。
+    recorded_at: '2026-07-25T08:34:27+00:00'
+  - kind: verification
+    summary: 规格审查：兼容标准对象、Markdown 围栏、解释文本和 JSON 字符串包裹对象；数组/标量/无 JSON 仍拒绝；普通文本索引与既有过滤链路未改变。
+    recorded_at: '2026-07-25T08:34:27+00:00'
+  - kind: verification
+    summary: 静态检查：uv run --project api ruff check api/core/rag/graph_indexing/extractor.py
+      api/tests/unit_tests/core/rag/graph_indexing/test_extractor.py；结果：All checks
+      passed。ruff format --check；结果：2 files already formatted。
+    recorded_at: '2026-07-25T08:34:27+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: '2026-07-25T08:34:27+00:00'
+- id: verification
+  skill: 验证
+  completion_gate: null
+  status: complete
+  required_files:
+  - path: D:/workplace/skills/my-skills/dev-spec-gen/references/testing-specs.md
+    sha256: 600abb701d7daef7bd2faad3d9e333717047577d32349c94eefae5fffcdf2d4c
+  output_files:
+  - path: D:/workplace/python/dify/api/core/rag/graph_indexing/extractor.py
+    sha256: 94b497fddc941fb2ea7ed32c557aa5af164f7024f17fdf910ff500d6c8e1f32b
+  - path: D:/workplace/python/dify/api/tests/unit_tests/core/rag/graph_indexing/test_extractor.py
+    sha256: d107ce82b6d5193bb2e11439b802c8d8bced5c61234a6d35da906b10707a1487
+  handoff_summary: 验证完成：代码、测试、静态检查均通过；生产部署和目标知识库重新索引留待用户授权后执行。
+  evidence: &id001
+  - kind: verification
+    summary: 定向测试：uv run --project api pytest api/tests/unit_tests/core/rag/graph_indexing/test_extractor.py
+      -q；23 passed，1 warning。
+    recorded_at: '2026-07-25T08:34:53+00:00'
+  - kind: verification
+    summary: 相关模块测试：uv run --project api pytest api/tests/unit_tests/core/rag/graph_indexing
+      -q；109 passed，3 warnings。
+    recorded_at: '2026-07-25T08:34:53+00:00'
+  - kind: verification
+    summary: 静态验证：ruff check 通过、ruff format --check 显示 2 files already formatted、git
+      diff --check 无输出。
+    recorded_at: '2026-07-25T08:34:53+00:00'
+  - kind: verification
+    summary: 未执行生产环境重新索引或真实 Neo4j 回归；当前验证为本地 mock LLM 与 GraphRAG 单元测试。
+    recorded_at: '2026-07-25T08:34:53+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  required_action: null
+  confirmed_at: '2026-07-25T08:34:53+00:00'
+current_stage: verification
+current_skill: 验证
+stage_status: complete
+next_skill: null
+resume_from: completed
+continuation_mode: auto
+required_action: null
+handoff_summary: 阶段 verification 已完成，任务编排中的全部阶段已完成。
+evidence: *id001
+blocked_reason: null
+failure_evidence: []
+invalidated_outputs: []
+limits:
+  handoff_summary_max_chars: 1200
+  evidence_summary_max_chars: 500
+  max_inline_evidence_items: 20
+updated_at: '2026-07-25T08:34:53+00:00'

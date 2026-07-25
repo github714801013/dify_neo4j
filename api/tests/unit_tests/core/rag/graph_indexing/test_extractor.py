@@ -1,11 +1,18 @@
 """LLM 实体抽取器的 schema 过滤逻辑单元测试。"""
 
+import json
 from datetime import date
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from core.rag.graph.entities import DEFAULT_GRAPH_SCHEMA, GraphPropertyDefinition, GraphSchema
-from core.rag.graph_indexing.extractor import ExtractedEntity, _filter_by_schema
+from core.rag.graph_indexing.extractor import (
+    ExtractedEntity,
+    GraphExtractionError,
+    _filter_by_schema,
+    extract_with_llm,
+)
 from core.rag.graph_indexing.prompts import build_user_prompt
 
 
@@ -33,6 +40,62 @@ def _property_schema() -> GraphSchema:
             ],
         },
     )
+
+
+def _extract_from_llm_output(raw_output: str):
+    response = MagicMock()
+    response.message.get_text_content.return_value = raw_output
+    model_instance = MagicMock()
+    model_instance.invoke_llm.return_value = response
+
+    with patch("core.rag.graph_indexing.extractor.ModelManager.for_tenant") as mock_for_tenant:
+        mock_for_tenant.return_value.get_model_instance.return_value = model_instance
+        return extract_with_llm(
+            tenant_id="tenant-id",
+            provider="provider",
+            model="model",
+            temperature=0,
+            segment_text="Dify 包含知识库模块。",
+            schema=_schema(),
+        )
+
+
+@pytest.mark.parametrize(
+    "raw_output",
+    [
+        '{"entities": [{"name": "Dify", "type": "PRODUCT"}], "relations": []}',
+        '```json\n{"entities": [{"name": "Dify", "type": "PRODUCT"}], "relations": []}\n```',
+        '结果如下：\n{"entities": [{"name": "Dify", "type": "PRODUCT"}], "relations": []}\n以上。',
+        json.dumps('{"entities": [{"name": "Dify", "type": "PRODUCT"}], "relations": []}'),
+    ],
+)
+def test_extract_with_llm_accepts_json_object_output_variants(raw_output: str):
+    result = _extract_from_llm_output(raw_output)
+
+    assert result.entities == [ExtractedEntity(name="Dify", entity_type="PRODUCT")]
+    assert result.triples == []
+
+
+@pytest.mark.parametrize("raw_output", ['[{"entities": []}]', "not json"])
+def test_extract_with_llm_rejects_non_object_output(raw_output: str):
+    with pytest.raises(GraphExtractionError, match="llm output is not a json object"):
+        _extract_from_llm_output(raw_output)
+
+
+def test_extract_with_llm_applies_schema_filter_after_parsing():
+    raw_output = json.dumps(
+        {
+            "entities": [
+                {"name": "Dify", "type": "PRODUCT"},
+                {"name": "Ghost", "type": "UNKNOWN"},
+            ],
+            "relations": [],
+        }
+    )
+
+    result = _extract_from_llm_output(raw_output)
+
+    assert [entity.name for entity in result.entities] == ["Dify"]
 
 
 def test_build_user_prompt_requires_typed_entity_properties_and_empty_relation_properties():
