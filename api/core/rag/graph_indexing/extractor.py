@@ -18,9 +18,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -123,11 +125,7 @@ def extract_with_llm(
         logger.warning("graph_extract llm invoke failed tenant=%s model=%s err=%s", tenant_id, model, ex)
         raise GraphExtractionError(f"llm invoke failed: {ex}") from ex
 
-    raw_text = getattr(getattr(response, "message", None), "get_text_content", lambda: "")()
-    if not raw_text:
-        raise GraphExtractionError("llm returned empty content")
-
-    payload = _parse_llm_payload(raw_text)
+    payload = _parse_llm_response(response)
 
     return _filter_by_schema(
         payload,
@@ -135,6 +133,94 @@ def extract_with_llm(
         strict=strict,
         max_triplets_per_chunk=max_triplets_per_chunk,
     )
+
+
+def _parse_llm_response(response: object) -> dict:
+    """从 LLM 响应中提取结构化 JSON 对象。
+
+    部分带思考模式的模型会把最终结果放在 ``reasoning_content``、工具调用参数
+    或结构化响应字段中，而不是 ``message.get_text_content()``。按优先级尝试这些
+    字段，并且只有成功解析为对象时才接受，避免把纯思考文本当成抽取结果。
+    """
+    candidates = _iter_llm_response_candidates(response)
+    has_candidate = False
+    for raw_text in candidates:
+        has_candidate = True
+        try:
+            return _parse_llm_payload(raw_text)
+        except GraphExtractionError:
+            continue
+
+    if not has_candidate:
+        raise GraphExtractionError("llm returned empty content")
+    raise GraphExtractionError("llm output is not a json object")
+
+
+def _iter_llm_response_candidates(response: object) -> Iterator[str]:
+    """按响应字段优先级返回可能包含抽取 JSON 的文本候选。"""
+    message = _get_response_field(response, "message")
+    seen: set[str] = set()
+
+    message_text = _get_response_field(message, "get_text_content")
+    if callable(message_text):
+        yield from _unique_text_candidates(message_text(), seen)
+
+    yield from _unique_text_candidates(_get_response_field(message, "content"), seen)
+    yield from _iter_tool_call_candidates(_get_response_field(message, "tool_calls"), seen)
+
+    for field_name in ("structured_output", "output", "output_text", "text", "content"):
+        yield from _unique_text_candidates(_get_response_field(response, field_name), seen)
+
+    yield from _unique_text_candidates(_get_response_field(response, "reasoning_content"), seen)
+
+
+def _iter_tool_call_candidates(tool_calls: object, seen: set[str]) -> Iterator[str]:
+    """提取工具调用中的 function.arguments，兼容对象和字典响应。"""
+    if not isinstance(tool_calls, (list, tuple)):
+        return
+
+    for tool_call in tool_calls:
+        function = _get_response_field(tool_call, "function")
+        arguments = _get_response_field(function, "arguments")
+        yield from _unique_text_candidates(arguments, seen)
+
+
+def _unique_text_candidates(value: object, seen: set[str]) -> Iterator[str]:
+    """将响应字段转换为文本候选，并在同一响应内去重。"""
+    for candidate in _text_candidates(value):
+        normalized = candidate.strip()
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            yield normalized
+
+
+def _text_candidates(value: object) -> Iterator[str]:
+    """递归提取文本字段或结构化字典的 JSON 表示。"""
+    if isinstance(value, str):
+        yield value
+        return
+
+    if isinstance(value, Mapping):
+        for field_name in ("text", "content", "data", "output_text", "arguments"):
+            if field_name in value:
+                yield from _text_candidates(value[field_name])
+                return
+        try:
+            yield json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return
+        return
+
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _text_candidates(item)
+
+
+def _get_response_field(value: object, field_name: str) -> object:
+    """读取对象或字典响应字段，忽略不存在的字段。"""
+    if isinstance(value, Mapping):
+        return value.get(field_name)
+    return getattr(value, field_name, None)
 
 
 def _parse_llm_payload(raw_text: str) -> dict:

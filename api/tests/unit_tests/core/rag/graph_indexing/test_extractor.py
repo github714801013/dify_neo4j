@@ -2,6 +2,7 @@
 
 import json
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -42,9 +43,7 @@ def _property_schema() -> GraphSchema:
     )
 
 
-def _extract_from_llm_output(raw_output: str):
-    response = MagicMock()
-    response.message.get_text_content.return_value = raw_output
+def _extract_from_llm_response(response):
     model_instance = MagicMock()
     model_instance.invoke_llm.return_value = response
 
@@ -58,6 +57,12 @@ def _extract_from_llm_output(raw_output: str):
             segment_text="Dify 包含知识库模块。",
             schema=_schema(),
         )
+
+
+def _extract_from_llm_output(raw_output: str):
+    response = MagicMock()
+    response.message.get_text_content.return_value = raw_output
+    return _extract_from_llm_response(response)
 
 
 @pytest.mark.parametrize(
@@ -80,6 +85,64 @@ def test_extract_with_llm_accepts_json_object_output_variants(raw_output: str):
 def test_extract_with_llm_rejects_non_object_output(raw_output: str):
     with pytest.raises(GraphExtractionError, match="llm output is not a json object"):
         _extract_from_llm_output(raw_output)
+
+
+def test_extract_with_llm_accepts_tool_call_json_arguments_when_message_content_is_empty():
+    response = SimpleNamespace(
+        message=SimpleNamespace(
+            content=[],
+            tool_calls=[
+                SimpleNamespace(
+                    function=SimpleNamespace(
+                        arguments=json.dumps(
+                            {"entities": [{"name": "Dify", "type": "PRODUCT"}], "relations": []}
+                        )
+                    )
+                )
+            ],
+        ),
+        reasoning_content=None,
+    )
+
+    result = _extract_from_llm_response(response)
+
+    assert result.entities == [ExtractedEntity(name="Dify", entity_type="PRODUCT")]
+
+
+def test_extract_with_llm_accepts_json_embedded_in_reasoning_content_when_message_content_is_empty():
+    response = SimpleNamespace(
+        message=SimpleNamespace(content=[]),
+        reasoning_content=(
+            "先分析文档内容，最终结构化结果如下："
+            '{"entities": [{"name": "Dify", "type": "PRODUCT"}], "relations": []}'
+        ),
+    )
+
+    result = _extract_from_llm_response(response)
+
+    assert result.entities == [ExtractedEntity(name="Dify", entity_type="PRODUCT")]
+
+
+def test_extract_with_llm_accepts_structured_output_field_when_message_content_is_empty():
+    response = SimpleNamespace(
+        message=SimpleNamespace(content=[]),
+        structured_output={"entities": [{"name": "Dify", "type": "PRODUCT"}], "relations": []},
+        reasoning_content=None,
+    )
+
+    result = _extract_from_llm_response(response)
+
+    assert result.entities == [ExtractedEntity(name="Dify", entity_type="PRODUCT")]
+
+
+def test_extract_with_llm_rejects_reasoning_without_structured_json():
+    response = SimpleNamespace(
+        message=SimpleNamespace(content=[]),
+        reasoning_content="这里只是思考过程，没有最终结构化结果。",
+    )
+
+    with pytest.raises(GraphExtractionError, match="llm output is not a json object"):
+        _extract_from_llm_response(response)
 
 
 def test_extract_with_llm_applies_schema_filter_after_parsing():
