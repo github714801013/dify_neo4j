@@ -383,7 +383,8 @@ class TestDatasetServiceCreationAndUpdate:
             model_type=ModelType.TEXT_EMBEDDING,
         )
         check_embedding.assert_not_called()
-        mock_db.session.commit.assert_called_once()
+        mock_db.session.flush.assert_called_once()
+        mock_db.session.commit.assert_not_called()
 
     def test_create_empty_dataset_creates_external_binding_for_high_quality_dataset(self):
         account = SimpleNamespace(id="user-1")
@@ -440,7 +441,8 @@ class TestDatasetServiceCreationAndUpdate:
             created_by="user-1",
         )
         assert mock_db.session.add.call_count == 2
-        mock_db.session.commit.assert_called_once()
+        mock_db.session.flush.assert_called_once()
+        mock_db.session.commit.assert_not_called()
 
     def test_create_empty_rag_pipeline_dataset_raises_for_duplicate_name(self):
         entity = RagPipelineDatasetCreateEntity(

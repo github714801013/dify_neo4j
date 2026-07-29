@@ -487,7 +487,6 @@ class DatasetService:
             )
             session.add(external_knowledge_binding)
 
-        session.commit()
         enterprise_rbac_service.try_sync_creator_access_policy_member_bindings(
             tenant_id,
             account.id,
