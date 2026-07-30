@@ -13,6 +13,7 @@ import {
   useMemo,
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import { DEFAULT_DOCUMENT_GRAPH_SCHEMA } from '@/app/components/datasets/graph-rag/constants'
 import SummaryIndexSetting from '@/app/components/datasets/settings/summary-index-setting'
 import { checkShowMultiModalTip } from '@/app/components/datasets/settings/utils'
 import { ModelTypeEnum } from '@/app/components/header/account-setting/model-provider-page/declarations'
@@ -217,7 +218,10 @@ const Panel: FC<NodePanelProps<KnowledgeBaseNodeType>> = ({
   const chunksInputWarning = validationIssue?.code === KnowledgeBaseValidationIssueCode.chunksVariableRequired
   const embeddingModelWarning = indexingTechnique === IndexMethodEnum.QUALIFIED && embeddingModelStatus !== 'active'
   const graphIndexTemplate = useMemo(
-    () => toGraphIndexTemplate(datasetGraphExtractionConfig),
+    () => toGraphIndexTemplate(datasetGraphExtractionConfig) ?? {
+      enabled: false,
+      schema: toGraphIndexSchema(DEFAULT_DOCUMENT_GRAPH_SCHEMA),
+    },
     [datasetGraphExtractionConfig],
   )
 

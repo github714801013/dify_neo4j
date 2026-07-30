@@ -15,16 +15,19 @@ export const DEFAULT_GRAPH_RETRIEVAL_CONFIG: GraphRetrievalConfig = {
 }
 
 export const DEFAULT_DOCUMENT_GRAPH_SCHEMA: GraphSchema = {
-  entity_types: ['person', 'organization', 'location', 'event', 'concept'],
-  relation_types: ['works_for', 'located_in', 'participates_in', 'related_to'],
+  entity_types: ['product', 'module', 'feature', 'version', 'api', 'parameter', 'error', 'document'],
+  relation_types: ['contains', 'supports', 'depends_on', 'available_in', 'configures', 'calls', 'returns', 'causes', 'solves', 'describes'],
   allowed_triples: [
-    ['person', 'works_for', 'organization'],
-    ['person', 'located_in', 'location'],
-    ['organization', 'located_in', 'location'],
-    ['person', 'participates_in', 'event'],
-    ['organization', 'participates_in', 'event'],
-    ['organization', 'related_to', 'organization'],
-    ['concept', 'related_to', 'concept'],
+    ['product', 'contains', 'module'],
+    ['module', 'contains', 'feature'],
+    ['feature', 'available_in', 'version'],
+    ['feature', 'configures', 'parameter'],
+    ['api', 'calls', 'api'],
+    ['error', 'causes', 'feature'],
+    ['error', 'solves', 'feature'],
+    ['document', 'describes', 'product'],
+    ['document', 'describes', 'module'],
+    ['document', 'describes', 'feature'],
   ],
   entity_properties: {},
   relation_properties: {},

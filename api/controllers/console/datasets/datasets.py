@@ -39,6 +39,8 @@ from core.rag.extractor.entity.datasource_type import DatasourceType
 from core.rag.extractor.entity.extract_setting import ExtractSetting, NotionInfo, WebsiteInfo
 from core.rag.graph.entities import (
     DEFAULT_DOCUMENT_GRAPH_SCHEMA,
+    DEFAULT_GRAPH_SCHEMA,
+    LEGACY_DOCUMENT_GRAPH_SCHEMA,
     GraphExtractionConfig,
     GraphExtractModelConfig,
     GraphQueryMode,
@@ -139,6 +141,9 @@ def _get_graph_extraction_config(
         schema = DEFAULT_DOCUMENT_GRAPH_SCHEMA
     else:
         schema = GraphSchema.model_validate(config.schema_json)
+        # 将旧版本写入的通用大写默认 Schema 映射到文档默认 Schema；用户自定义 Schema 不变。
+        if schema in (DEFAULT_GRAPH_SCHEMA, LEGACY_DOCUMENT_GRAPH_SCHEMA):
+            schema = DEFAULT_DOCUMENT_GRAPH_SCHEMA
     return {
         "enabled": config.is_graph_indexing_enabled,
         "schema": schema.model_dump(mode="json"),

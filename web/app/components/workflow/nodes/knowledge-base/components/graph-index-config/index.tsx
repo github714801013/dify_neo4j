@@ -17,6 +17,7 @@ import {
   SelectTrigger,
 } from '@langgenius/dify-ui/select'
 import { Switch } from '@langgenius/dify-ui/switch'
+import { Textarea } from '@langgenius/dify-ui/textarea'
 import {
   useCallback,
   useMemo,
@@ -67,6 +68,43 @@ const graphPropertyNamePattern = /^[a-z][a-z0-9_]{0,63}$/
 
 const graphPropertyValueTypes = ['string', 'number', 'boolean', 'date'] as const
 
+const defaultDocumentGraphSchema: GraphIndexSchema = {
+  entity_types: [
+    'product',
+    'module',
+    'feature',
+    'version',
+    'api',
+    'parameter',
+    'error',
+    'document',
+  ].map(name => ({ name, properties: [] })),
+  relation_types: [
+    'contains',
+    'supports',
+    'depends_on',
+    'available_in',
+    'configures',
+    'calls',
+    'returns',
+    'causes',
+    'solves',
+    'describes',
+  ].map(name => ({ name, properties: [] })),
+  allowed_triples: [
+    { source_type: 'product', relation_type: 'contains', target_type: 'module' },
+    { source_type: 'module', relation_type: 'contains', target_type: 'feature' },
+    { source_type: 'feature', relation_type: 'available_in', target_type: 'version' },
+    { source_type: 'feature', relation_type: 'configures', target_type: 'parameter' },
+    { source_type: 'api', relation_type: 'calls', target_type: 'api' },
+    { source_type: 'error', relation_type: 'causes', target_type: 'feature' },
+    { source_type: 'error', relation_type: 'solves', target_type: 'feature' },
+    { source_type: 'document', relation_type: 'describes', target_type: 'product' },
+    { source_type: 'document', relation_type: 'describes', target_type: 'module' },
+    { source_type: 'document', relation_type: 'describes', target_type: 'feature' },
+  ],
+}
+
 const defaultExtractModelConfig = {
   temperature: 0,
   max_tokens: undefined,
@@ -93,18 +131,19 @@ const createDraftSchemaType = (name: string, properties: GraphPropertyDefinition
   properties: properties.map(property => ({ ...property, id: createDraftItemId() })),
 })
 
-const normalizeSchema = (schema?: GraphIndexSchema): GraphIndexDraft['schema'] => ({
-  entity_types: schema?.entity_types.map(item => createDraftSchemaType(item.name, item.properties)) ?? [],
-  relation_types: schema?.relation_types.map(item => createDraftSchemaType(item.name, item.properties)) ?? [],
-  allowed_triples: schema?.allowed_triples.map(item => ({ ...item, id: createDraftItemId() })) ?? [],
+const normalizeSchema = (schema: GraphIndexSchema = defaultDocumentGraphSchema): GraphIndexDraft['schema'] => ({
+  entity_types: schema.entity_types.map(item => createDraftSchemaType(item.name, item.properties)),
+  relation_types: schema.relation_types.map(item => createDraftSchemaType(item.name, item.properties)),
+  allowed_triples: schema.allowed_triples.map(item => ({ ...item, id: createDraftItemId() })),
 })
 
 const createDraft = (config?: GraphIndexConfigValue, templateConfig?: GraphIndexConfigValue): GraphIndexDraft => {
   const initialConfig = config?.enabled ? config : templateConfig
+  const initialSchema = initialConfig?.schema ?? defaultDocumentGraphSchema
 
   return {
     enabled: config?.enabled === true,
-    schema: normalizeSchema(initialConfig?.schema),
+    schema: normalizeSchema(initialSchema),
     extractModelConfig: initialConfig?.extract_model_config
       ? {
           ...defaultExtractModelConfig,
@@ -223,6 +262,55 @@ const toConfig = (draft: GraphIndexDraft): GraphIndexConfigValue => ({
   },
 })
 
+const schemaToJson = (schema: GraphIndexDraft['schema']) => ({
+  entity_types: schema.entity_types.map(({ name, properties }) => ({ name, properties: properties.map(({ id, ...property }) => property) })),
+  relation_types: schema.relation_types.map(({ name, properties }) => ({ name, properties: properties.map(({ id, ...property }) => property) })),
+  allowed_triples: schema.allowed_triples.map(({ id, ...triple }) => triple),
+})
+
+const formatSchemaJson = (schema: GraphIndexDraft['schema']) => JSON.stringify(schemaToJson(schema), null, 2)
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const parseSchemaJson = (value: string): GraphIndexSchema => {
+  const parsed: unknown = JSON.parse(value)
+  if (!isRecord(parsed) || !Array.isArray(parsed.entity_types) || !Array.isArray(parsed.relation_types) || !Array.isArray(parsed.allowed_triples))
+    throw new Error('invalid_schema_shape')
+
+  const parseTypes = (types: unknown[]) => types.map((item) => {
+    if (!isRecord(item) || typeof item.name !== 'string' || !Array.isArray(item.properties))
+      throw new Error('invalid_schema_type')
+    const properties = item.properties.map((property) => {
+      if (!isRecord(property) || typeof property.name !== 'string' || typeof property.description !== 'string'
+        || !graphPropertyValueTypes.includes(property.value_type as typeof graphPropertyValueTypes[number])
+        || typeof property.required !== 'boolean') {
+        throw new Error('invalid_schema_property')
+      }
+      return {
+        name: property.name,
+        description: property.description,
+        value_type: property.value_type as GraphPropertyDefinition['value_type'],
+        required: property.required,
+      }
+    })
+    return { name: item.name, properties }
+  })
+
+  const schema: GraphIndexSchema = {
+    entity_types: parseTypes(parsed.entity_types),
+    relation_types: parseTypes(parsed.relation_types),
+    allowed_triples: parsed.allowed_triples.map((item) => {
+      if (!isRecord(item) || typeof item.source_type !== 'string' || typeof item.relation_type !== 'string' || typeof item.target_type !== 'string')
+        throw new Error('invalid_schema_triple')
+      return { source_type: item.source_type, relation_type: item.relation_type, target_type: item.target_type }
+    }),
+  }
+
+  if (!isSchemaComplete(normalizeSchema(schema)))
+    throw new Error('incomplete_schema')
+  return schema
+}
+
 const GraphIndexConfigContent = ({
   config,
   templateConfig,
@@ -232,12 +320,18 @@ const GraphIndexConfigContent = ({
   const { t } = useTranslation()
   const { data: modelList } = useModelList(ModelTypeEnum.textGeneration)
   const [draft, setDraft] = useState<GraphIndexDraft>(() => createDraft(config, templateConfig))
+  const [schemaJson, setSchemaJson] = useState(() => formatSchemaJson(createDraft(config, templateConfig).schema))
+  const [schemaJsonError, setSchemaJsonError] = useState<string>()
   const draftRef = useRef(draft)
 
   const updateDraft = useCallback((updater: (current: GraphIndexDraft) => GraphIndexDraft) => {
-    const nextDraft = updater(draftRef.current)
+    const currentDraft = draftRef.current
+    const nextDraft = updater(currentDraft)
+    const schemaChanged = nextDraft.schema !== currentDraft.schema
     draftRef.current = nextDraft
     setDraft(nextDraft)
+    if (schemaChanged)
+      setSchemaJson(formatSchemaJson(nextDraft.schema))
 
     if (isDraftComplete(nextDraft))
       onChange(toConfig(nextDraft))
@@ -266,6 +360,22 @@ const GraphIndexConfigContent = ({
       ...current,
       schema: updater(current.schema),
     }))
+  }, [updateDraft])
+
+  const handleSchemaJsonImport = useCallback(() => {
+    try {
+      const schema = parseSchemaJson(schemaJson)
+      setSchemaJsonError(undefined)
+      updateDraft(current => ({ ...current, schema: normalizeSchema(schema) }))
+    }
+    catch (error) {
+      setSchemaJsonError(error instanceof SyntaxError ? 'invalidJson' : 'invalidSchema')
+    }
+  }, [schemaJson, updateDraft])
+
+  const handleResetSchema = useCallback(() => {
+    setSchemaJsonError(undefined)
+    updateDraft(current => ({ ...current, schema: normalizeSchema(defaultDocumentGraphSchema) }))
   }, [updateDraft])
 
   const handleModelChange = useCallback((model: DefaultModel) => {
@@ -464,6 +574,36 @@ const GraphIndexConfigContent = ({
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="system-sm-medium text-text-secondary">
+                {t('nodes.knowledgeBase.graphIndex.jsonSchema', { ns: 'workflow' })}
+              </div>
+              <div className="flex gap-2">
+                <Button size="small" disabled={readonly} onClick={handleSchemaJsonImport}>
+                  {t('nodes.knowledgeBase.graphIndex.importJson', { ns: 'workflow' })}
+                </Button>
+                <Button size="small" disabled={readonly} onClick={handleResetSchema}>
+                  {t('nodes.knowledgeBase.graphIndex.resetDocumentSchema', { ns: 'workflow' })}
+                </Button>
+              </div>
+            </div>
+            <Textarea
+              aria-label={t('nodes.knowledgeBase.graphIndex.jsonSchema', { ns: 'workflow' })}
+              value={schemaJson}
+              onValueChange={value => setSchemaJson(value)}
+              disabled={readonly}
+              rows={12}
+              className="font-mono text-xs"
+            />
+            {schemaJsonError && (
+              <div role="alert" className="body-xs-regular text-text-warning">
+                {schemaJsonError === 'invalidJson'
+                  ? t('nodes.knowledgeBase.graphIndex.invalidJson', { ns: 'workflow' })
+                  : t('nodes.knowledgeBase.graphIndex.invalidSchema', { ns: 'workflow' })}
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="system-sm-medium text-text-secondary">
                 {t('nodes.knowledgeBase.graphIndex.entityTypes', { ns: 'workflow' })}
               </div>
               <Button
@@ -471,7 +611,7 @@ const GraphIndexConfigContent = ({
                 disabled={readonly}
                 onClick={() => updateSchema(schema => ({
                   ...schema,
-                  entity_types: [...schema.entity_types, createDraftSchemaType(getNextTypeName('ENTITY', schema.entity_types))],
+                  entity_types: [...schema.entity_types, createDraftSchemaType(getNextTypeName('entity', schema.entity_types))],
                 }))}
               >
                 {t('nodes.knowledgeBase.graphIndex.addEntityType', { ns: 'workflow' })}
@@ -590,7 +730,7 @@ const GraphIndexConfigContent = ({
                 disabled={readonly}
                 onClick={() => updateSchema(schema => ({
                   ...schema,
-                  relation_types: [...schema.relation_types, createDraftSchemaType(getNextTypeName('RELATION', schema.relation_types))],
+                  relation_types: [...schema.relation_types, createDraftSchemaType(getNextTypeName('relation', schema.relation_types))],
                 }))}
               >
                 {t('nodes.knowledgeBase.graphIndex.addRelationType', { ns: 'workflow' })}

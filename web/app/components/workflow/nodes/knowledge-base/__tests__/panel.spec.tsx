@@ -230,6 +230,52 @@ describe('KnowledgeBasePanel', () => {
     }), undefined)
   })
 
+  it('should use the lowercase document graph schema when the dataset has no extraction template', () => {
+    render(<Panel id="knowledge-base-1" data={createData({ graph_index_config: { enabled: false } }) as never} panelProps={panelProps} />)
+
+    expect(mockGraphIndexConfig).toHaveBeenCalledWith(expect.objectContaining({
+      templateConfig: {
+        enabled: false,
+        schema: {
+          entity_types: [
+            { name: 'product', properties: [] },
+            { name: 'module', properties: [] },
+            { name: 'feature', properties: [] },
+            { name: 'version', properties: [] },
+            { name: 'api', properties: [] },
+            { name: 'parameter', properties: [] },
+            { name: 'error', properties: [] },
+            { name: 'document', properties: [] },
+          ],
+          relation_types: [
+            { name: 'contains', properties: [] },
+            { name: 'supports', properties: [] },
+            { name: 'depends_on', properties: [] },
+            { name: 'available_in', properties: [] },
+            { name: 'configures', properties: [] },
+            { name: 'calls', properties: [] },
+            { name: 'returns', properties: [] },
+            { name: 'causes', properties: [] },
+            { name: 'solves', properties: [] },
+            { name: 'describes', properties: [] },
+          ],
+          allowed_triples: [
+            { source_type: 'product', relation_type: 'contains', target_type: 'module' },
+            { source_type: 'module', relation_type: 'contains', target_type: 'feature' },
+            { source_type: 'feature', relation_type: 'available_in', target_type: 'version' },
+            { source_type: 'feature', relation_type: 'configures', target_type: 'parameter' },
+            { source_type: 'api', relation_type: 'calls', target_type: 'api' },
+            { source_type: 'error', relation_type: 'causes', target_type: 'feature' },
+            { source_type: 'error', relation_type: 'solves', target_type: 'feature' },
+            { source_type: 'document', relation_type: 'describes', target_type: 'product' },
+            { source_type: 'document', relation_type: 'describes', target_type: 'module' },
+            { source_type: 'document', relation_type: 'describes', target_type: 'feature' },
+          ],
+        },
+      },
+    }), undefined)
+  })
+
   it('should pass the dataset graph extraction config as the node initialization template', () => {
     mockDataset.current = {
       graph_extraction_config: {

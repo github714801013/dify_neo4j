@@ -195,22 +195,59 @@ DEFAULT_GRAPH_SCHEMA = GraphSchema(
     allowed_triples=list(DEFAULT_ALLOWED_TRIPLES),
 )
 
-DEFAULT_DOCUMENT_ENTITY_TYPES = ("person", "organization", "location", "event", "concept")
-DEFAULT_DOCUMENT_RELATION_TYPES = ("works_for", "located_in", "participates_in", "related_to")
+DEFAULT_DOCUMENT_ENTITY_TYPES = (
+    "product",
+    "module",
+    "feature",
+    "version",
+    "api",
+    "parameter",
+    "error",
+    "document",
+)
+DEFAULT_DOCUMENT_RELATION_TYPES = (
+    "contains",
+    "supports",
+    "depends_on",
+    "available_in",
+    "configures",
+    "calls",
+    "returns",
+    "causes",
+    "solves",
+    "describes",
+)
 DEFAULT_DOCUMENT_ALLOWED_TRIPLES = (
-    ("person", "works_for", "organization"),
-    ("person", "located_in", "location"),
-    ("organization", "located_in", "location"),
-    ("person", "participates_in", "event"),
-    ("organization", "participates_in", "event"),
-    ("organization", "related_to", "organization"),
-    ("concept", "related_to", "concept"),
+    ("product", "contains", "module"),
+    ("module", "contains", "feature"),
+    ("feature", "available_in", "version"),
+    ("feature", "configures", "parameter"),
+    ("api", "calls", "api"),
+    ("error", "causes", "feature"),
+    ("error", "solves", "feature"),
+    ("document", "describes", "product"),
+    ("document", "describes", "module"),
+    ("document", "describes", "feature"),
 )
 
 DEFAULT_DOCUMENT_GRAPH_SCHEMA = GraphSchema(
     entity_types=list(DEFAULT_DOCUMENT_ENTITY_TYPES),
     relation_types=list(DEFAULT_DOCUMENT_RELATION_TYPES),
     allowed_triples=list(DEFAULT_DOCUMENT_ALLOWED_TRIPLES),
+)
+
+LEGACY_DOCUMENT_GRAPH_SCHEMA = GraphSchema(
+    entity_types=["person", "organization", "location", "event", "concept"],
+    relation_types=["works_for", "located_in", "participates_in", "related_to"],
+    allowed_triples=[
+        ("person", "works_for", "organization"),
+        ("person", "located_in", "location"),
+        ("organization", "located_in", "location"),
+        ("person", "participates_in", "event"),
+        ("organization", "participates_in", "event"),
+        ("organization", "related_to", "organization"),
+        ("concept", "related_to", "concept"),
+    ],
 )
 
 
