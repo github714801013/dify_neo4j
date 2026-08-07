@@ -2,20 +2,9 @@
 
 ## 設定説明
 
-#### ステップ1：WeCom（企業微信）でボットアプリケーションを作成する
+1. WeCom（企業微信）で AI ボットを作成し、`bot_id` と `secret` を取得します。
+2. Dify で `企業微信 Bot` プラグインの設定を追加します。
+3. `bot_id` と `secret` を入力し、メッセージに応答する Dify Chat App を選択します。
+4. `WECOM_LONG_LINK_ENABLED=true` を設定して、Dify worker の長接続プロセスを有効にします。
 
-こちらの[記事](https://cloud.tencent.com/document/product/1759/121473)を参照してください
-
-![1](./_assets/1.png)
-この画面まで進んだら、まずURLは空白のままにしておきます（次のステップで入力します）。TokenとEncoding-AESKeyをランダムに生成します。
-
-
-#### ステップ2：Difyでプラグイン設定を行う
-![2](./_assets/2.png)
-Difyのプラグインページで`企業微信Bot`プラグインを見つけ、設定を追加します。ステップ1で取得したTokenとEncoding-AESKeyを入力し、chat型のDifyアプリケーションを選択します。
-
-![3](./_assets/3.png)
-保存するとURLが生成されるので、それをコピーしてステップ1のWeComの設定ページに貼り付け、保存をクリックします（保存に失敗した場合は、もう一度試してください）。
-
-これでWeComでこのボットと楽しくチャットできるようになります：
-![4](./_assets/4.jpg)
+Dify worker は安全な WebSocket 接続を使って WeCom に接続します。このバージョンでは HTTP コールバック URL、Token、Encoding-AESKey は不要です。

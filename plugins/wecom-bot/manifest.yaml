@@ -7,15 +7,15 @@ label:
   zh_Hans: 企业微信 Bot
   ja_JP: WeCom Bot
 description:
-  en_US: Receive Enterprise WeChat callbacks as an endpoint and reply through Dify apps, similar to Slack Bot.
-  zh_Hans: 将企业微信回调接入 Dify，可调用 App/Agent 回复用户，类似 Slack Bot。
-  ja_JP: 企業微信のコールバックを受信し、Dify アプリで応答できる Bot プラグインです。
+  en_US: Configure a WeCom AI Bot long-link connection for a Dify chat app.
+  zh_Hans: 配置企业微信智能机器人长链接，并绑定 Dify Chat App。
+  ja_JP: WeCom AI Bot の長接続を設定し、Dify Chat App にバインドします。
 icon: icon.png
 resource:
   memory: 268435456
   permission:
     endpoint:
-      enabled: true
+      enabled: false
     app:
       enabled: true
     storage:

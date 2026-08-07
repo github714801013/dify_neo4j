@@ -61,7 +61,10 @@ if [[ "${MODE}" == "worker" ]]; then
   fi
 
   WORKER_POOL="${CELERY_WORKER_POOL:-${CELERY_WORKER_CLASS:-gevent}}"
-  echo "Starting Celery worker with queues: ${DEFAULT_QUEUES}"
+  export CELERY_QUEUES="${DEFAULT_QUEUES}"
+  if [[ "${WECOM_LONG_LINK_ENABLED,,}" == "true" ]]; then
+    exec python -m core.wecom_long_link.supervisor
+  fi
 
   exec celery -A celery_entrypoint.celery worker -P ${WORKER_POOL} $CONCURRENCY_OPTION \
     --max-tasks-per-child ${MAX_TASKS_PER_CHILD:-50} --loglevel ${LOG_LEVEL:-INFO} \
