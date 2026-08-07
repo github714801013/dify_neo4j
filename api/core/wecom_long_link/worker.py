@@ -4,6 +4,7 @@ import asyncio
 
 from sqlalchemy import select
 
+from app_factory import create_app
 from models.account import Tenant
 from models.engine import db
 
@@ -56,7 +57,9 @@ async def _run_tenant(tenant_id: str) -> None:
 
 
 async def run() -> None:
-    await asyncio.gather(*(_run_tenant(tenant_id) for tenant_id in _tenant_ids()))
+    flask_app = create_app()[1]
+    with flask_app.app_context():
+        await asyncio.gather(*(_run_tenant(tenant_id) for tenant_id in _tenant_ids()))
 
 
 if __name__ == "__main__":
