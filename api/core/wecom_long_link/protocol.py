@@ -251,15 +251,17 @@ class WeComWebSocketProtocol:
             "respond": "aibot_respond_msg",
             "ping": "ping",
         }[operation]
-        if command != expected_command:
+        if command is not None and command != expected_command:
             raise WeComResponseError(f"{operation} response command mismatch")
         errcode = response.get("errcode")
         if isinstance(errcode, bool) or not isinstance(errcode, int):
             raise WeComResponseError(f"{operation} response errcode is invalid")
         if errcode != 0:
+            errmsg = response.get("errmsg")
+            detail = errmsg.strip()[:200] if isinstance(errmsg, str) and errmsg.strip() else "unknown error"
             if operation == "subscribe" and errcode in {40001, 40004}:
-                raise WeComAuthenticationError(f"{operation} failed")
-            raise WeComResponseError(f"{operation} failed")
+                raise WeComAuthenticationError(f"{operation} failed with errcode={errcode}: {detail}")
+            raise WeComResponseError(f"{operation} failed with errcode={errcode}: {detail}")
 
     @staticmethod
     def _require_non_empty_string(value: Any, field: str) -> str:

@@ -137,8 +137,8 @@ def test_missing_callback_bot_id_is_rejected() -> None:
     asyncio.run(run())
 
 
-def test_missing_response_command_is_rejected() -> None:
-    from core.wecom_long_link.protocol import WeComResponseError, WeComWebSocketProtocol
+def test_response_without_command_is_accepted_for_pending_request() -> None:
+    from core.wecom_long_link.protocol import WeComWebSocketProtocol
 
     async def run() -> None:
         socket = FakeWebSocket(
@@ -147,8 +147,8 @@ def test_missing_response_command_is_rejected() -> None:
         )
         client = WeComWebSocketProtocol(socket=socket, bot_id="bot-1", secret="secret-1")
 
-        with pytest.raises(WeComResponseError, match="command mismatch"):
-            await client.ping(req_id="ping-1")
+        await client.ping(req_id="ping-1")
+        await client.close()
 
     asyncio.run(run())
 

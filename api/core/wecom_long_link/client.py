@@ -79,6 +79,12 @@ class WeComOutboundClient:
                     secret=self.config.secret,
                 )
                 await asyncio.wait_for(self._protocol.subscribe(req_id=str(uuid.uuid4())), timeout=15)
+                logger.info(
+                    "WeCom long-link subscribed tenant=%s instance=%s bot=%s",
+                    self.config.tenant_id,
+                    self.config.instance_id,
+                    self.config.bot_id,
+                )
                 lease_stop = asyncio.Event()
                 self._lease_task = asyncio.create_task(self._renew_lease(key, owner, lease_stop))
                 ping_task = asyncio.create_task(self._ping_loop(self._protocol, lease_stop))
