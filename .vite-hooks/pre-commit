@@ -61,4 +61,4 @@ if $skip_web_checks; then
     exit 0
 fi
 
-vp staged
+vp staged --no-stash
