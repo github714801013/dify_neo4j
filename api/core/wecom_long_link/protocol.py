@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+logger = logging.getLogger(__name__)
 
 
 class WebSocketLike(Protocol):
@@ -85,13 +89,22 @@ class WeComWebSocketProtocol:
             raise item
         return item
 
-    async def respond_text(self, message: WeComMessage, content: str) -> None:
+    async def respond_text(self, message: WeComMessage, content: str, *, stream_id: str | None = None) -> None:
+        await self.respond_stream(message, content, stream_id=stream_id or str(uuid.uuid4()), finish=True)
+
+    async def respond_stream(self, message: WeComMessage, content: str, *, stream_id: str, finish: bool) -> None:
         content = self._require_non_empty_string(content, "response content")
+        self._require_non_empty_string(stream_id, "response stream id")
+        if not isinstance(finish, bool):
+            raise TypeError("response stream finish must be a bool")
         await self._request(
             {
                 "cmd": "aibot_respond_msg",
                 "headers": {"req_id": message.request_id},
-                "body": {"msgtype": "text", "text": {"content": content}},
+                "body": {
+                    "msgtype": "stream",
+                    "stream": {"id": stream_id, "finish": finish, "content": content},
+                },
             },
             operation="respond",
             req_id=message.request_id,
@@ -146,18 +159,30 @@ class WeComWebSocketProtocol:
         try:
             while not self._closed:
                 payload = await self._receive_json()
-                command = payload.get("cmd")
+                command = self._normalize_command(payload.get("cmd"))
                 headers = payload.get("headers")
                 if not isinstance(headers, dict):
                     raise WeComMalformedFrameError("websocket frame headers must be an object")
                 req_id = self._require_non_empty_string(headers.get("req_id"), "websocket req_id")
+                logger.info("WeCom websocket frame received command=%s req_id=%s", command, req_id)
+                if command == "aibot_event_callback":
+                    event = payload.get("body")
+                    event_type = event.get("event", {}).get("eventtype") if isinstance(event, dict) else None
+                    logger.info("WeCom websocket event received req_id=%s event_type=%s", req_id, event_type)
+                    continue
                 if command == "aibot_msg_callback":
+                    logger.info(
+                        "WeCom websocket callback received req_id=%s command=%s",
+                        req_id,
+                        command,
+                    )
                     message = self._parse_message(payload)
                     if message.message_type != "text":
                         raise WeComUnknownCommandError(f"unsupported message type: {message.message_type}")
                     await self._messages.put(message)
+                    continue
                 if command != "aibot_msg_callback" and command not in {"aibot_subscribe", "aibot_respond_msg", "ping"}:
-                    if command is not None or req_id not in self._pending:
+                    if command is not None:
                         raise WeComUnknownCommandError(f"unknown websocket command: {command!r}")
                 if command is None and req_id in self._pending_commands:
                     command = self._pending_commands[req_id]
@@ -172,6 +197,7 @@ class WeComWebSocketProtocol:
             raise
         except BaseException as exc:
             if not self._closed:
+                logger.warning("WeCom websocket reader failed error_type=%s", type(exc).__name__, exc_info=True)
                 self._reader_error = exc
                 self._fail_pending(exc)
                 await self._messages.put(exc)
@@ -245,7 +271,7 @@ class WeComWebSocketProtocol:
         response_req_id = headers.get("req_id")
         if not isinstance(response_req_id, str) or response_req_id != req_id:
             raise WeComResponseError(f"{operation} response request id mismatch")
-        command = response.get("cmd")
+        command = WeComWebSocketProtocol._normalize_command(response.get("cmd"))
         expected_command = {
             "subscribe": "aibot_subscribe",
             "respond": "aibot_respond_msg",
@@ -262,6 +288,14 @@ class WeComWebSocketProtocol:
             if operation == "subscribe" and errcode in {40001, 40004}:
                 raise WeComAuthenticationError(f"{operation} failed with errcode={errcode}: {detail}")
             raise WeComResponseError(f"{operation} failed with errcode={errcode}: {detail}")
+
+    @staticmethod
+    def _normalize_command(command: Any) -> str | None:
+        if command is None or command == "":
+            return None
+        if not isinstance(command, str):
+            raise WeComMalformedFrameError("websocket command must be a string")
+        return command
 
     @staticmethod
     def _require_non_empty_string(value: Any, field: str) -> str:

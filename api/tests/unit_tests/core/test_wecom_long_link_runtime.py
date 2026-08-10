@@ -68,6 +68,43 @@ def test_reconciler_stops_disabled_client() -> None:
     asyncio.run(run())
 
 
+def test_app_router_creates_safe_node_summary() -> None:
+    event = SimpleNamespace(
+        workflow_run_id="workflow-run-1",
+        data=SimpleNamespace(
+            id="execution-1",
+            node_id="node-1",
+            node_type="llm",
+            title="分析节点",
+            elapsed_time=1.2,
+        ),
+    )
+
+    summary = WeComAppRouter._node_summary(event, set())
+
+    assert summary is not None
+    assert summary.kind == "node_finished"
+    assert summary.content == "节点已完成：分析节点（llm），耗时 1.2 秒"
+    assert summary.workflow_run_id == "workflow-run-1"
+
+
+def test_app_router_deduplicates_node_summary() -> None:
+    event = SimpleNamespace(
+        workflow_run_id="workflow-run-1",
+        data=SimpleNamespace(
+            id="execution-1",
+            node_id="node-1",
+            node_type="llm",
+            title="分析节点",
+            elapsed_time=1.2,
+        ),
+    )
+    seen_nodes: set[tuple[str | None, str | None]] = set()
+
+    assert WeComAppRouter._node_summary(event, seen_nodes) is not None
+    assert WeComAppRouter._node_summary(event, seen_nodes) is None
+
+
 def test_app_router_rejects_cross_tenant_app(monkeypatch: pytest.MonkeyPatch) -> None:
     class Session:
         def __enter__(self):

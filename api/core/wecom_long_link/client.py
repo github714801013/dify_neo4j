@@ -5,7 +5,6 @@ import contextlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from extensions.ext_redis import redis_client
 
@@ -60,7 +59,7 @@ class WeComOutboundClient:
                 return
             await asyncio.wait_for(protocol.ping(req_id=str(uuid.uuid4())), timeout=15)
 
-    async def run(self, *, on_message: Callable[[Any], Awaitable[str | None]] | None = None) -> None:
+    async def run(self, *, on_message: Callable[..., Awaitable[str | None]] | None = None) -> None:
         while self.config.enabled:
             owner = str(uuid.uuid4())
             key = lease_key(
@@ -104,6 +103,14 @@ class WeComOutboundClient:
                             await message_task
                         continue
                     message = await message_task
+                    logger.info(
+                        "WeCom long-link message received tenant=%s instance=%s bot=%s msgid=%s type=%s",
+                        self.config.tenant_id,
+                        self.config.instance_id,
+                        self.config.bot_id,
+                        message.message_id,
+                        message.message_type,
+                    )
                     message_key_value = message_key(
                         tenant_id=self.config.tenant_id,
                         instance_id=self.config.instance_id,
@@ -120,15 +127,30 @@ class WeComOutboundClient:
                     if not self._state_store.claim(message_key_value):
                         continue
                     try:
-                        content = await on_message(message) if on_message else None
+                        stream_id = str(uuid.uuid4())
+                        content = (
+                            await on_message(message, self._protocol, stream_id)
+                            if on_message and self._protocol
+                            else None
+                        )
                     except Exception:
+                        logger.warning(
+                            "WeCom long-link message handler failed tenant=%s instance=%s bot=%s msgid=%s",
+                            self.config.tenant_id,
+                            self.config.instance_id,
+                            self.config.bot_id,
+                            message.message_id,
+                            exc_info=True,
+                        )
                         self._state_store.reset_processing(message_key_value)
                         raise
                     if content:
                         if len(content) > 10000:
                             raise ValueError("WeCom response content is too long")
                         self._state_store.mark_completed(message_key_value, content)
-                        await asyncio.wait_for(self._protocol.respond_text(message, content), timeout=15)
+                        await asyncio.wait_for(
+                            self._protocol.respond_text(message, content, stream_id=stream_id), timeout=15
+                        )
                         self._state_store.mark_reply_sent(message_key_value)
             except asyncio.CancelledError:
                 raise
