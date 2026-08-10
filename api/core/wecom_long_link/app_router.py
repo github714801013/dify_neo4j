@@ -177,9 +177,7 @@ class WeComAppRouter:
         title = title if isinstance(title, str) else "未命名节点"
         node_type = node_type if isinstance(node_type, str) else "unknown"
         elapsed_time = elapsed_time if isinstance(elapsed_time, int | float) else None
-        content = f"节点已完成：{title}（{node_type}）"
-        if elapsed_time is not None:
-            content = f"{content}，耗时 {elapsed_time:.1f} 秒"
+        content = f"{title}…"
         workflow_run_id = (
             event.get("workflow_run_id")
             if isinstance(event, Mapping)

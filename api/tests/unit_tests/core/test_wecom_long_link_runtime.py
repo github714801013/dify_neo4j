@@ -84,7 +84,7 @@ def test_app_router_creates_safe_node_summary() -> None:
 
     assert summary is not None
     assert summary.kind == "node_finished"
-    assert summary.content == "节点已完成：分析节点（llm），耗时 1.2 秒"
+    assert summary.content == "分析节点…"
     assert summary.workflow_run_id == "workflow-run-1"
 
 
