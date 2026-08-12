@@ -96,10 +96,12 @@ class WeComAppRouter:
                         text = self._event_text(event)
                         if text:
                             answer_parts.append(text)
+                            yield WeComAppEvent(kind="answer_chunk", content=text)
                     elif event_name == "text_replace":
                         text = self._event_text(event)
                         if text:
                             answer_parts = [text]
+                            yield WeComAppEvent(kind="answer_replace", content=text)
                     elif event_name == "error":
                         raise ValueError("Dify app stream returned an error")
 

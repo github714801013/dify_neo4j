@@ -69,6 +69,7 @@ class WeComWebSocketProtocol:
         self._messages: asyncio.Queue[WeComMessage | BaseException] = asyncio.Queue(maxsize=100)
         self._closed = False
         self._reader_error: BaseException | None = None
+        self._closed_event = asyncio.Event()
 
     async def subscribe(self, *, req_id: str) -> None:
         self._require_non_empty_string(req_id, "req_id")
@@ -89,10 +90,18 @@ class WeComWebSocketProtocol:
             raise item
         return item
 
+    async def wait_closed(self) -> None:
+        await self._closed_event.wait()
+        if self._reader_error is not None:
+            raise self._reader_error
+        raise WeComProtocolError("websocket protocol is closed")
+
     async def respond_text(self, message: WeComMessage, content: str, *, stream_id: str | None = None) -> None:
         await self.respond_stream(message, content, stream_id=stream_id or str(uuid.uuid4()), finish=True)
 
     async def respond_stream(self, message: WeComMessage, content: str, *, stream_id: str, finish: bool) -> None:
+        if not isinstance(content, str) or not content:
+            raise ValueError("response content must be non-empty")
         content = self._require_non_empty_string(content, "response content")
         self._require_non_empty_string(stream_id, "response stream id")
         if not isinstance(finish, bool):
@@ -122,6 +131,7 @@ class WeComWebSocketProtocol:
         if self._closed:
             return
         self._closed = True
+        self._closed_event.set()
         error = WeComProtocolError("websocket protocol is closed")
         self._fail_pending(error)
         self._orphan_responses.clear()
@@ -199,6 +209,7 @@ class WeComWebSocketProtocol:
             if not self._closed:
                 logger.warning("WeCom websocket reader failed error_type=%s", type(exc).__name__, exc_info=True)
                 self._reader_error = exc
+                self._closed_event.set()
                 self._fail_pending(exc)
                 await self._messages.put(exc)
 

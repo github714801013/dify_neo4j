@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 
@@ -12,6 +13,7 @@ from models.engine import db
 
 from .app_router import WeComAppRouter
 from .client import WeComOutboundClient
+from .feedback import FeedbackCoordinator, FeedbackFrame
 from .provider import build_config_provider
 from .reconciler import WeComConfigReconciler
 
@@ -47,11 +49,78 @@ async def _run_tenant(tenant_id: str) -> None:
             )
             return None
         stream_task = None
+        feedback_task = None
+        timer_task = None
         stop_event = threading.Event()
+        cancel_event = asyncio.Event()
         try:
+            event_stream_holder: dict[str, object] = {}
             router = WeComAppRouter()
             events: asyncio.Queue = asyncio.Queue()
+            frames: asyncio.Queue[FeedbackFrame | None] = asyncio.Queue(maxsize=32)
             loop = asyncio.get_running_loop()
+
+            async def discard_frames() -> None:
+                """有界清空待发送帧，避免失败路径永久阻塞 join。"""
+                while True:
+                    try:
+                        frames.get_nowait()
+                    except asyncio.QueueEmpty:
+                        return
+                    else:
+                        frames.task_done()
+
+            def stop_producer() -> None:
+                stop_event.set()
+                cancel_event.set()
+
+            def enqueue_frame(frame: FeedbackFrame) -> None:
+                if stop_event.is_set() or cancel_event.is_set():
+                    return
+                try:
+                    frames.put_nowait(frame)
+                except asyncio.QueueFull:
+                    stop_producer()
+                    loop.call_soon_threadsafe(events.put_nowait, RuntimeError("feedback frame queue is full"))
+
+            async def send_frames() -> None:
+                while True:
+                    frame = await frames.get()
+                    try:
+                        if frame is None:
+                            return
+                        if cancel_event.is_set() or stop_event.is_set():
+                            continue
+                        await protocol.respond_stream(
+                            message,
+                            frame.content,
+                            stream_id=frame.stream_id,
+                            finish=frame.finish,
+                        )
+                    except BaseException as exc:
+                        if not isinstance(exc, asyncio.CancelledError):
+                            stop_producer()
+                            coordinator.on_cancelled()
+                            await discard_frames()
+                            events.put_nowait(exc)
+                        raise
+                    finally:
+                        frames.task_done()
+
+            coordinator = FeedbackCoordinator(
+                stream_id=stream_id,
+                send=enqueue_frame,
+            )
+            feedback_task = asyncio.create_task(send_frames())
+
+            async def refresh_feedback() -> None:
+                while not cancel_event.is_set():
+                    try:
+                        await asyncio.wait_for(cancel_event.wait(), timeout=1)
+                    except TimeoutError:
+                        coordinator.advance()
+
+            timer_task = asyncio.create_task(refresh_feedback())
 
             def stream_events() -> None:
                 try:
@@ -62,6 +131,7 @@ async def _run_tenant(tenant_id: str) -> None:
                         query=message.text,
                         conversation_id=message.chat_id,
                     )
+                    event_stream_holder["stream"] = event_stream
                     for event in event_stream:
                         if stop_event.is_set():
                             event_stream.close()
@@ -82,22 +152,27 @@ async def _run_tenant(tenant_id: str) -> None:
                     break
                 if isinstance(event, BaseException):
                     raise event
-                if event.kind == "node_finished" and event.content:
-                    try:
-                        await protocol.respond_stream(message, event.content, stream_id=stream_id, finish=False)
-                    except Exception:
-                        logger.warning(
-                            "WeCom long-link node update failed tenant=%s bot=%s msgid=%s node=%s",
-                            tenant_id,
-                            message.bot_id,
-                            message.message_id,
-                            event.node_id,
-                            exc_info=True,
-                        )
+                if event.kind == "node_finished":
+                    coordinator.on_node_change(event.node_title or event.content)
+                elif event.kind == "answer_chunk":
+                    coordinator.on_answer_chunk(event.content or "")
+                elif event.kind == "answer_replace":
+                    coordinator.on_answer_replace(event.content or "")
                 elif event.kind == "final":
                     reply = event.content
+                    coordinator.on_final_text(event.content or "")
             await stream_task
+            await frames.join()
+            if feedback_task:
+                frames.put_nowait(None)
+                await feedback_task
+        except asyncio.CancelledError:
+            cancel_event.set()
+            coordinator.on_cancelled()
+            raise
         except Exception as exc:
+            cancel_event.set()
+            coordinator.on_cancelled()
             logger.warning(
                 "WeCom long-link app reply failed tenant=%s bot=%s msgid=%s app=%s error_type=%s",
                 tenant_id,
@@ -108,10 +183,22 @@ async def _run_tenant(tenant_id: str) -> None:
             )
             raise
         finally:
+            cancel_event.set()
             stop_event.set()
-            if stream_task:
-                stream_task.cancel()
-                await asyncio.gather(stream_task, return_exceptions=True)
+            event_stream = event_stream_holder.get("stream")
+            if event_stream is not None:
+                with contextlib.suppress(Exception):
+                    event_stream.close()
+            await discard_frames()
+            for task in (timer_task, stream_task, feedback_task):
+                if task:
+                    task.cancel()
+            await asyncio.gather(
+                *(task for task in (timer_task, stream_task, feedback_task) if task),
+                return_exceptions=True,
+            )
+            with contextlib.suppress(asyncio.QueueFull):
+                frames.put_nowait(None)
         logger.info(
             "WeCom long-link app reply generated tenant=%s bot=%s msgid=%s app=%s",
             tenant_id,

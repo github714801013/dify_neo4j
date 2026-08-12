@@ -59,6 +59,41 @@ class WeComOutboundClient:
                 return
             await asyncio.wait_for(protocol.ping(req_id=str(uuid.uuid4())), timeout=15)
 
+    async def _run_message_handler(
+        self,
+        message: WeComMessage,
+        stream_id: str,
+        on_message: Callable[..., Awaitable[str | None]] | None,
+        ping_task: asyncio.Task[None],
+    ) -> str | None:
+        if not on_message or not self._protocol:
+            return None
+        handler_task = asyncio.create_task(on_message(message, self._protocol, stream_id))
+        connection_task = asyncio.create_task(self._protocol.wait_closed())
+        try:
+            done, _ = await asyncio.wait(
+                {handler_task, self._lease_task, ping_task, connection_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if connection_task in done:
+                connection_task.result()
+            if self._lease_task in done:
+                self._lease_task.result()
+            if ping_task in done:
+                ping_task.result()
+            if handler_task not in done:
+                handler_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await handler_task
+                raise asyncio.CancelledError
+            return handler_task.result()
+        finally:
+            for task in (handler_task, connection_task):
+                if not task.done():
+                    task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
     async def run(self, *, on_message: Callable[..., Awaitable[str | None]] | None = None) -> None:
         while self.config.enabled:
             owner = str(uuid.uuid4())
@@ -89,20 +124,27 @@ class WeComOutboundClient:
                 ping_task = asyncio.create_task(self._ping_loop(self._protocol, lease_stop))
                 while True:
                     message_task = asyncio.create_task(self._protocol.receive_message())
-                    done, _ = await asyncio.wait(
-                        {message_task, self._lease_task, ping_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if self._lease_task in done:
-                        self._lease_task.result()
-                    if ping_task in done:
-                        ping_task.result()
-                    if message_task not in done:
-                        message_task.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await message_task
-                        continue
-                    message = await message_task
+                    connection_task = asyncio.create_task(self._protocol.wait_closed())
+                    try:
+                        done, _ = await asyncio.wait(
+                            {message_task, self._lease_task, ping_task, connection_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if connection_task in done:
+                            connection_task.result()
+                        if self._lease_task in done:
+                            self._lease_task.result()
+                        if ping_task in done:
+                            ping_task.result()
+                        if message_task not in done:
+                            continue
+                        message = await message_task
+                    finally:
+                        for task in (message_task, connection_task):
+                            if not task.done():
+                                task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await task
                     logger.info(
                         "WeCom long-link message received tenant=%s instance=%s bot=%s msgid=%s type=%s",
                         self.config.tenant_id,
@@ -128,30 +170,17 @@ class WeComOutboundClient:
                         continue
                     try:
                         stream_id = str(uuid.uuid4())
-                        content = (
-                            await on_message(message, self._protocol, stream_id)
-                            if on_message and self._protocol
-                            else None
-                        )
-                    except Exception:
-                        logger.warning(
-                            "WeCom long-link message handler failed tenant=%s instance=%s bot=%s msgid=%s",
-                            self.config.tenant_id,
-                            self.config.instance_id,
-                            self.config.bot_id,
-                            message.message_id,
-                            exc_info=True,
-                        )
+                        content = await self._run_message_handler(message, stream_id, on_message, ping_task)
+                    except BaseException:
                         self._state_store.reset_processing(message_key_value)
                         raise
                     if content:
                         if len(content) > 10000:
                             raise ValueError("WeCom response content is too long")
                         self._state_store.mark_completed(message_key_value, content)
-                        await asyncio.wait_for(
-                            self._protocol.respond_text(message, content, stream_id=stream_id), timeout=15
-                        )
                         self._state_store.mark_reply_sent(message_key_value)
+                    else:
+                        self._state_store.reset_processing(message_key_value)
             except asyncio.CancelledError:
                 raise
             except Exception:
