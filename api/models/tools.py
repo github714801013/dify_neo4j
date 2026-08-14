@@ -305,7 +305,6 @@ class MCPToolProvider(TypeBase):
     __tablename__ = "tool_mcp_providers"
     __table_args__ = (
         sa.PrimaryKeyConstraint("id", name="tool_mcp_provider_pkey"),
-        sa.UniqueConstraint("tenant_id", "server_url_hash", name="unique_mcp_provider_server_url"),
         sa.UniqueConstraint("tenant_id", "name", name="unique_mcp_provider_name"),
         sa.UniqueConstraint("tenant_id", "server_identifier", name="unique_mcp_provider_server_identifier"),
     )
@@ -319,7 +318,7 @@ class MCPToolProvider(TypeBase):
     server_identifier: Mapped[str] = mapped_column(String(64), nullable=False)
     # encrypted url of the mcp provider
     server_url: Mapped[str] = mapped_column(LongText, nullable=False)
-    # hash of server_url for uniqueness check
+    # hash of server_url for change detection without decrypting the URL
     server_url_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     # icon of the mcp provider
     icon: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -346,6 +345,9 @@ class MCPToolProvider(TypeBase):
     timeout: Mapped[float] = mapped_column(sa.Float, nullable=False, server_default=sa.text("30"), default=30.0)
     sse_read_timeout: Mapped[float] = mapped_column(
         sa.Float, nullable=False, server_default=sa.text("300"), default=300.0
+    )
+    transport: Mapped[str] = mapped_column(
+        sa.String(32), nullable=False, server_default=sa.text("'sse'"), default="sse"
     )
     # encrypted headers for MCP server requests
     encrypted_headers: Mapped[str | None] = mapped_column(LongText, nullable=True, default=None)

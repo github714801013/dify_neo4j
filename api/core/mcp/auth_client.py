@@ -11,7 +11,7 @@ from typing import Any, override
 
 from sqlalchemy.orm import Session
 
-from core.entities.mcp_provider import MCPProviderEntity
+from core.entities.mcp_provider import MCPProviderEntity, MCPTransport
 from core.mcp.error import MCPAuthError
 from core.mcp.mcp_client import MCPClient
 from core.mcp.types import CallToolResult, Tool
@@ -37,6 +37,7 @@ class MCPClientWithAuthRetry(MCPClient):
         headers: dict[str, str] | None = None,
         timeout: float | None = None,
         sse_read_timeout: float | None = None,
+        transport: MCPTransport | None = None,
         provider_entity: MCPProviderEntity | None = None,
         authorization_code: str | None = None,
         by_server_id: bool = False,
@@ -56,7 +57,7 @@ class MCPClientWithAuthRetry(MCPClient):
             forward_identity_active: If True, suppress the static-OAuth retry
                 on 401 — the forwarded identity must propagate as-is.
         """
-        super().__init__(server_url, headers, timeout, sse_read_timeout)
+        super().__init__(server_url, headers, timeout, sse_read_timeout, transport)
 
         self.provider_entity = provider_entity
         self.authorization_code = authorization_code

@@ -12,7 +12,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from core.entities.mcp_provider import IdentityMode, MCPAuthentication, MCPConfiguration, MCPProviderEntity
+from core.entities.mcp_provider import (
+    IdentityMode,
+    MCPAuthentication,
+    MCPConfiguration,
+    MCPProviderEntity,
+    MCPTransport,
+)
 from core.helper import encrypter
 from core.helper.provider_cache import NoOpProviderCredentialCache
 from core.mcp.auth.auth_flow import auth
@@ -49,6 +55,7 @@ class ReconnectResult(BaseModel):
     authed: bool = Field(description="Whether the provider is authenticated")
     tools: str = Field(description="JSON string of tool list")
     encrypted_credentials: str = Field(description="JSON string of encrypted credentials")
+    transport: MCPTransport = MCPTransport.SSE
 
 
 class ServerUrlValidationResult(BaseModel):
@@ -73,6 +80,7 @@ class ProviderUrlValidationData(BaseModel):
     headers: dict[str, str]
     timeout: float | None
     sse_read_timeout: float | None
+    transport: MCPTransport = MCPTransport.SSE
 
 
 class MCPToolManageService:
@@ -145,8 +153,8 @@ class MCPToolManageService:
 
         server_url_hash = hashlib.sha256(server_url.encode()).hexdigest()
 
-        # Check for existing provider
-        self._check_provider_exists(tenant_id, name, server_url_hash, server_identifier)
+        # Name and server identifier are tenant-scoped business identifiers. A URL may be shared.
+        self._check_provider_exists(tenant_id, name, server_identifier)
 
         # Encrypt sensitive data
         encrypted_server_url = encrypter.encrypt_token(tenant_id, server_url)
@@ -175,8 +183,11 @@ class MCPToolManageService:
             identity_mode=identity_mode,
         )
 
-        self._session.add(mcp_tool)
-        self._session.flush()
+        try:
+            self._session.add(mcp_tool)
+            self._session.flush()
+        except IntegrityError as e:
+            self._handle_integrity_error(e, name, server_identifier)
 
         mcp_providers = ToolTransformService.mcp_provider_to_user_provider(mcp_tool, for_list=True)
         return mcp_providers
@@ -208,16 +219,13 @@ class MCPToolManageService:
         """
         mcp_provider = self.get_provider(provider_id=provider_id, tenant_id=tenant_id)
 
-        # Check for duplicate name (excluding current provider)
-        if name != mcp_provider.name:
-            stmt = select(MCPToolProvider).where(
-                MCPToolProvider.tenant_id == tenant_id,
-                MCPToolProvider.name == name,
-                MCPToolProvider.id != provider_id,
+        if name != mcp_provider.name or server_identifier != mcp_provider.server_identifier:
+            self._check_provider_exists(
+                tenant_id,
+                name,
+                server_identifier,
+                exclude_provider_id=provider_id,
             )
-            existing_provider = self._session.scalar(stmt)
-            if existing_provider:
-                raise ValueError(f"MCP tool {name} already exists")
 
         # Get URL update data from validation result
         encrypted_server_url = None
@@ -246,6 +254,7 @@ class MCPToolManageService:
                     mcp_provider.authed = reconnect_result.authed
                     mcp_provider.tools = reconnect_result.tools
                     mcp_provider.encrypted_credentials = reconnect_result.encrypted_credentials
+                    mcp_provider.transport = reconnect_result.transport.value
 
             # Update optional configuration fields
             self._update_optional_fields(mcp_provider, configuration)
@@ -267,7 +276,7 @@ class MCPToolManageService:
             self._session.flush()
 
         except IntegrityError as e:
-            self._handle_integrity_error(e, name, server_url, server_identifier)
+            self._handle_integrity_error(e, name, server_identifier)
 
     def delete_provider(self, *, tenant_id: str, provider_id: str) -> None:
         """Delete an MCP provider."""
@@ -325,7 +334,7 @@ class MCPToolManageService:
         # Retrieve tools from remote server
         server_url = provider_entity.decrypt_server_url()
         try:
-            tools = self._retrieve_remote_mcp_tools(server_url, headers, provider_entity)
+            tools, selected_transport = self._retrieve_remote_mcp_tools(server_url, headers, provider_entity)
         except MCPError as e:
             raise ValueError(f"Failed to connect to MCP server: {e}")
 
@@ -338,11 +347,25 @@ class MCPToolManageService:
             tools_payload.append(data)
         db_provider.tools = json.dumps(tools_payload)
         db_provider.authed = True
+        if selected_transport:
+            db_provider.transport = selected_transport.value
         db_provider.updated_at = datetime.now()
         self._session.flush()
 
         # Build API response
         return self._build_tool_provider_response(db_provider, provider_entity, tools)
+
+    def persist_transport(
+        self, *, provider_id: str, tenant_id: str, transport: MCPTransport, by_server_id: bool = False
+    ) -> None:
+        """Persist the transport selected by a successful MCP connection."""
+        if by_server_id:
+            provider = self.get_provider(server_identifier=provider_id, tenant_id=tenant_id)
+        else:
+            provider = self.get_provider(provider_id=provider_id, tenant_id=tenant_id)
+        provider.transport = transport.value
+        provider.updated_at = datetime.now()
+        self._session.flush()
 
     # ========== OAuth and Credentials Operations ==========
 
@@ -422,23 +445,29 @@ class MCPToolManageService:
 
     # ========== Private Helper Methods ==========
 
-    def _check_provider_exists(self, tenant_id: str, name: str, server_url_hash: str, server_identifier: str) -> None:
-        """Check if provider with same attributes already exists."""
+    def _check_provider_exists(
+        self,
+        tenant_id: str,
+        name: str,
+        server_identifier: str,
+        *,
+        exclude_provider_id: str | None = None,
+    ) -> None:
+        """Reject tenant-scoped duplicate MCP provider business identifiers."""
         stmt = select(MCPToolProvider).where(
             MCPToolProvider.tenant_id == tenant_id,
             or_(
                 MCPToolProvider.name == name,
-                MCPToolProvider.server_url_hash == server_url_hash,
                 MCPToolProvider.server_identifier == server_identifier,
             ),
         )
+        if exclude_provider_id is not None:
+            stmt = stmt.where(MCPToolProvider.id != exclude_provider_id)
         existing_provider = self._session.scalar(stmt)
 
         if existing_provider:
             if existing_provider.name == name:
                 raise ValueError(f"MCP tool {name} already exists")
-            if existing_provider.server_url_hash == server_url_hash:
-                raise ValueError("MCP tool with this server URL already exists")
             if existing_provider.server_identifier == server_identifier:
                 raise ValueError(f"MCP tool {server_identifier} already exists")
 
@@ -499,9 +528,10 @@ class MCPToolManageService:
             headers=headers,
             timeout=provider_entity.timeout,
             sse_read_timeout=provider_entity.sse_read_timeout,
+            transport=provider_entity.transport,
             provider_entity=provider_entity,
         ) as mcp_client:
-            return mcp_client.list_tools()
+            return mcp_client.list_tools(), mcp_client.selected_transport
 
     _ACTION_TO_OAUTH: dict[AuthActionType, OAuthDataType] = {
         AuthActionType.SAVE_CLIENT_INFO: OAuthDataType.CLIENT_INFO,
@@ -572,9 +602,10 @@ class MCPToolManageService:
         provider_entity = provider.to_entity()
         return ProviderUrlValidationData(
             current_server_url_hash=provider.server_url_hash,
-            headers=provider_entity.headers,
+            headers=provider_entity.decrypt_headers(),
             timeout=provider_entity.timeout,
             sse_read_timeout=provider_entity.sse_read_timeout,
+            transport=provider_entity.transport,
         )
 
     @staticmethod
@@ -625,6 +656,7 @@ class MCPToolManageService:
             headers=validation_data.headers,
             timeout=validation_data.timeout,
             sse_read_timeout=validation_data.sse_read_timeout,
+            transport=validation_data.transport,
         )
         return ServerUrlValidationResult(
             needs_validation=True,
@@ -641,12 +673,14 @@ class MCPToolManageService:
         headers: dict[str, str],
         timeout: float | None,
         sse_read_timeout: float | None,
+        transport: MCPTransport | None = None,
     ) -> ReconnectResult:
         return MCPToolManageService._reconnect_with_url(
             server_url=server_url,
             headers=headers,
             timeout=timeout,
             sse_read_timeout=sse_read_timeout,
+            transport=transport,
         )
 
     @staticmethod
@@ -656,6 +690,7 @@ class MCPToolManageService:
         headers: dict[str, str],
         timeout: float | None,
         sse_read_timeout: float | None,
+        transport: MCPTransport | None = None,
     ) -> ReconnectResult:
         """
         Attempt to connect to MCP server with given URL.
@@ -669,6 +704,7 @@ class MCPToolManageService:
                 headers=headers,
                 timeout=timeout,
                 sse_read_timeout=sse_read_timeout,
+                transport=transport,
             ) as mcp_client:
                 tools = mcp_client.list_tools()
                 # Ensure tool descriptions are non-null in payload
@@ -682,9 +718,15 @@ class MCPToolManageService:
                     authed=True,
                     tools=json.dumps(tools_payload),
                     encrypted_credentials=EMPTY_CREDENTIALS_JSON,
+                    transport=mcp_client.selected_transport or MCPTransport.SSE,
                 )
         except MCPAuthError:
-            return ReconnectResult(authed=False, tools=EMPTY_TOOLS_JSON, encrypted_credentials=EMPTY_CREDENTIALS_JSON)
+            return ReconnectResult(
+                authed=False,
+                tools=EMPTY_TOOLS_JSON,
+                encrypted_credentials=EMPTY_CREDENTIALS_JSON,
+                transport=transport or MCPTransport.SSE,
+            )
         except MCPError as e:
             raise ValueError(f"Failed to re-connect MCP server: {e}") from e
 
@@ -700,15 +742,11 @@ class MCPToolManageService:
         response["plugin_unique_identifier"] = provider_entity.provider_id
         return ToolProviderApiEntity(**response)
 
-    def _handle_integrity_error(
-        self, error: IntegrityError, name: str, server_url: str, server_identifier: str
-    ) -> None:
-        """Handle database integrity errors with user-friendly messages."""
+    def _handle_integrity_error(self, error: IntegrityError, name: str, server_identifier: str) -> None:
+        """Handle MCP provider business identifier constraint violations."""
         error_msg = str(error.orig)
         if "unique_mcp_provider_name" in error_msg:
             raise ValueError(f"MCP tool {name} already exists")
-        if "unique_mcp_provider_server_url" in error_msg:
-            raise ValueError(f"MCP tool {server_url} already exists")
         if "unique_mcp_provider_server_identifier" in error_msg:
             raise ValueError(f"MCP tool {server_identifier} already exists")
         raise error

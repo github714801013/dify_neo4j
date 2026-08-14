@@ -9,7 +9,7 @@ from typing import Any, cast, override
 from sqlalchemy.orm import Session
 
 from configs import dify_config
-from core.entities.mcp_provider import IdentityMode
+from core.entities.mcp_provider import IdentityMode, MCPTransport
 from core.mcp.auth_client import MCPClientWithAuthRetry
 from core.mcp.error import MCPConnectionError
 from core.mcp.types import (
@@ -47,6 +47,7 @@ class MCPTool(Tool):
         headers: dict[str, str] | None = None,
         timeout: float | None = None,
         sse_read_timeout: float | None = None,
+        transport: MCPTransport = MCPTransport.SSE,
         identity_mode: IdentityMode = IdentityMode.OFF,
     ):
         super().__init__(entity, runtime)
@@ -57,6 +58,7 @@ class MCPTool(Tool):
         self.headers = headers or {}
         self.timeout = timeout
         self.sse_read_timeout = sse_read_timeout
+        self.transport = transport
         self.identity_mode: IdentityMode = identity_mode
         self._latest_usage = LLMUsage.empty_usage()
 
@@ -251,6 +253,7 @@ class MCPTool(Tool):
             headers=self.headers,
             timeout=self.timeout,
             sse_read_timeout=self.sse_read_timeout,
+            transport=self.transport,
             identity_mode=self.identity_mode,
         )
 
@@ -325,10 +328,21 @@ class MCPTool(Tool):
                 headers=headers,
                 timeout=self.timeout,
                 sse_read_timeout=self.sse_read_timeout,
+                transport=provider_entity.transport,
                 provider_entity=provider_entity,
                 forward_identity_active=forward_identity_active,
             ) as mcp_client:
-                return mcp_client.invoke_tool(tool_name=self.entity.identity.name, tool_args=tool_parameters)
+                result = mcp_client.invoke_tool(tool_name=self.entity.identity.name, tool_args=tool_parameters)
+                selected_transport = mcp_client.selected_transport
+            if selected_transport and selected_transport != provider_entity.transport:
+                with Session(db.engine) as session, session.begin():
+                    MCPToolManageService(session=session).persist_transport(
+                        provider_id=self.provider_id,
+                        tenant_id=self.tenant_id,
+                        transport=selected_transport,
+                        by_server_id=True,
+                    )
+            return result
         except MCPConnectionError as e:
             raise ToolInvokeError(f"Failed to connect to MCP server: {e}") from e
         except Exception as e:

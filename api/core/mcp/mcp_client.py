@@ -4,13 +4,13 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, ExitStack
 from types import TracebackType
 from typing import Any
-from urllib.parse import urlparse
 
 from flask import has_request_context, request
 
+from core.entities.mcp_provider import MCPTransport
 from core.mcp.client.sse_client import sse_client
 from core.mcp.client.streamable_client import streamablehttp_client
-from core.mcp.error import MCPConnectionError
+from core.mcp.error import MCPAuthError, MCPConnectionError
 from core.mcp.session.client_session import ClientSession
 from core.mcp.types import CallToolResult, Tool
 
@@ -24,11 +24,14 @@ class MCPClient:
         headers: dict[str, str] | None = None,
         timeout: float | None = None,
         sse_read_timeout: float | None = None,
+        transport: MCPTransport | None = None,
     ):
         self.server_url = server_url
         self.headers = headers.copy() if headers else {}
         self.timeout = timeout
         self.sse_read_timeout = sse_read_timeout
+        self.transport = MCPTransport(transport) if transport else None
+        self.selected_transport: MCPTransport | None = None
 
         # Substitute placeholders with incoming request headers if in a request context
         if has_request_context() and self.headers:
@@ -55,28 +58,31 @@ class MCPClient:
     def __exit__(self, exc_type: type | None, exc_value: BaseException | None, traceback: TracebackType | None):
         self.cleanup()
 
-    def _initialize(
-        self,
-    ):
-        """Initialize the client with fallback to SSE if streamable connection fails"""
-        connection_methods: dict[str, Callable[..., AbstractContextManager[Any]]] = {
-            "mcp": streamablehttp_client,
-            "sse": sse_client,
-        }
+    def _initialize(self):
+        """Initialize a connection using the saved transport when available."""
+        if self.transport == MCPTransport.STREAMABLE_HTTP:
+            self._connect_streamable_http()
+            return
 
-        parsed_url = urlparse(self.server_url)
-        path = parsed_url.path or ""
-        method_name = path.rstrip("/").split("/")[-1] if path else ""
-        if method_name in connection_methods:
-            client_factory = connection_methods[method_name]
-            self.connect_server(client_factory, method_name)
-        else:
-            try:
-                logger.debug("Not supported method %s found in URL path, trying default 'mcp' method.", method_name)
-                self.connect_server(sse_client, "sse")
-            except (MCPConnectionError, ValueError):
-                logger.debug("MCP connection failed with 'sse', falling back to 'mcp' method.")
-                self.connect_server(streamablehttp_client, "mcp")
+        try:
+            self._connect_sse()
+        except MCPAuthError:
+            raise
+        except (MCPConnectionError, ValueError):
+            self._exit_stack.close()
+            self._exit_stack = ExitStack()
+            logger.debug("MCP connection failed with SSE, falling back to Streamable HTTP.")
+            self._connect_streamable_http()
+
+    def _connect_sse(self) -> None:
+        self.connect_server(sse_client, "sse")
+        self.transport = MCPTransport.SSE
+        self.selected_transport = MCPTransport.SSE
+
+    def _connect_streamable_http(self) -> None:
+        self.connect_server(streamablehttp_client, "mcp")
+        self.transport = MCPTransport.STREAMABLE_HTTP
+        self.selected_transport = MCPTransport.STREAMABLE_HTTP
 
     def connect_server(self, client_factory: Callable[..., AbstractContextManager[Any]], method_name: str) -> None:
         """

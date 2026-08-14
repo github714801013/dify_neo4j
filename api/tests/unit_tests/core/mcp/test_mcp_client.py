@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, Mock, patch
 import pytest
 from sqlalchemy.orm import Session
 
-from core.entities.mcp_provider import MCPProviderEntity
+from core.entities.mcp_provider import MCPProviderEntity, MCPTransport
 from core.mcp.auth_client import MCPClientWithAuthRetry
 from core.mcp.error import MCPAuthError, MCPConnectionError
 from core.mcp.mcp_client import MCPClient
@@ -30,6 +30,8 @@ class TestMCPClient:
         assert client.headers == {"Authorization": "Bearer test"}
         assert client.timeout == 30.0
         assert client.sse_read_timeout == 60.0
+        assert client.transport is None
+        assert client.selected_transport is None
         assert client._session is None
         assert isinstance(client._exit_stack, ExitStack)
         assert client._initialized is False
@@ -94,38 +96,30 @@ class TestMCPClient:
             "Authorization": "Bearer {{request.headers.X-Custom-Auth}}",
         }
 
+    @patch("core.mcp.mcp_client.sse_client")
     @patch("core.mcp.mcp_client.streamablehttp_client")
     @patch("core.mcp.mcp_client.ClientSession")
-    def test_initialize_with_mcp_url(self, mock_client_session, mock_streamable_client):
-        """Test initialization with MCP URL."""
-        # Setup mocks
+    def test_initialize_with_mcp_url(self, mock_client_session, mock_streamable_client, mock_sse_client):
+        """MCP URL remains SSE-first until a Streamable HTTP connection succeeds."""
+        mock_sse_client.side_effect = MCPConnectionError("SSE connection failed")
         mock_read_stream = Mock()
         mock_write_stream = Mock()
-        mock_client_context = Mock()
-        mock_streamable_client.return_value.__enter__.return_value = (
-            mock_read_stream,
-            mock_write_stream,
-            mock_client_context,
-        )
-
+        mock_streamable_client.return_value.__enter__.return_value = (mock_read_stream, mock_write_stream, Mock())
         mock_session = Mock()
         mock_client_session.return_value.__enter__.return_value = mock_session
 
         client = MCPClient(server_url="http://test.example.com/mcp")
         client._initialize()
 
-        # Verify streamable client was called
-        mock_streamable_client.assert_called_once_with(
-            url="http://test.example.com/mcp",
-            headers={},
-            timeout=None,
-            sse_read_timeout=None,
+        mock_sse_client.assert_called_once_with(
+            url="http://test.example.com/mcp", headers={}, timeout=None, sse_read_timeout=None
         )
-
-        # Verify session was created
+        mock_streamable_client.assert_called_once_with(
+            url="http://test.example.com/mcp", headers={}, timeout=None, sse_read_timeout=None
+        )
         mock_client_session.assert_called_once_with(mock_read_stream, mock_write_stream)
         mock_session.initialize.assert_called_once()
-        assert client._session == mock_session
+        assert client.selected_transport == MCPTransport.STREAMABLE_HTTP
 
     @patch("core.mcp.mcp_client.sse_client")
     @patch("core.mcp.mcp_client.ClientSession")
@@ -210,6 +204,62 @@ class TestMCPClient:
 
         # Verify session was created with MCP
         assert client._session == mock_session
+
+    @patch("core.mcp.mcp_client.sse_client")
+    @patch("core.mcp.mcp_client.streamablehttp_client")
+    @patch("core.mcp.mcp_client.ClientSession")
+    def test_initialize_sse_enter_failure_then_streamable_http_success_uses_streamable_transport(
+        self, mock_client_session, mock_streamable_client, mock_sse_client
+    ):
+        """SSE remains the default attempt, then a successful fallback becomes active."""
+        call_order: list[str] = []
+        mock_sse_client.side_effect = lambda **kwargs: call_order.append("sse") or MagicMock(
+            __enter__=Mock(side_effect=MCPConnectionError("SSE connection failed")),
+            __exit__=Mock(),
+        )
+        streamable_read = Mock(name="streamable_read")
+        streamable_write = Mock(name="streamable_write")
+        streamable_context = MagicMock(name="streamable_context")
+        streamable_context.__enter__.side_effect = lambda *_: call_order.append("streamable") or (
+            streamable_read,
+            streamable_write,
+            Mock(name="streamable_context_value"),
+        )
+        mock_streamable_client.side_effect = lambda **kwargs: streamable_context
+        mock_session = Mock()
+        mock_client_session.return_value.__enter__.return_value = mock_session
+
+        client = MCPClient(server_url="http://test.example.com")
+        client._initialize()
+
+        assert call_order == ["sse", "streamable"]
+        mock_sse_client.assert_called_once_with(
+            url="http://test.example.com", headers={}, timeout=None, sse_read_timeout=None
+        )
+        mock_streamable_client.assert_called_once_with(
+            url="http://test.example.com", headers={}, timeout=None, sse_read_timeout=None
+        )
+        mock_client_session.assert_called_once_with(streamable_read, streamable_write)
+        mock_session.initialize.assert_called_once()
+        assert client.transport == "streamable_http"
+
+    @patch("core.mcp.mcp_client.sse_client")
+    @patch("core.mcp.mcp_client.streamablehttp_client")
+    @patch("core.mcp.mcp_client.ClientSession")
+    def test_initialize_reuses_persisted_streamable_transport(
+        self, mock_client_session, mock_streamable_client, mock_sse_client
+    ):
+        """A persisted Streamable HTTP choice skips SSE on subsequent connections."""
+        mock_streamable_client.return_value.__enter__.return_value = (Mock(), Mock(), Mock())
+        mock_client_session.return_value.__enter__.return_value = Mock()
+
+        client = MCPClient(server_url="http://test.example.com", transport="streamable_http")
+        client._initialize()
+
+        mock_sse_client.assert_not_called()
+        mock_streamable_client.assert_called_once_with(
+            url="http://test.example.com", headers={}, timeout=None, sse_read_timeout=None
+        )
 
     @patch("core.mcp.mcp_client.streamablehttp_client")
     @patch("core.mcp.mcp_client.ClientSession")

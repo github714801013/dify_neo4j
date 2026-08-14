@@ -1381,6 +1381,7 @@ class ToolProviderMCPApi(Resource):
                 headers=payload.headers or {},
                 timeout=configuration.timeout,
                 sse_read_timeout=configuration.sse_read_timeout,
+                transport=None,
             )
             # Update just-created provider with authed/tools in a new short transaction
             with session_factory.create_session() as session, session.begin():
@@ -1388,6 +1389,7 @@ class ToolProviderMCPApi(Resource):
                 db_provider = service.get_provider(provider_id=result.id, tenant_id=tenant_id)
                 db_provider.authed = reconnect.authed
                 db_provider.tools = reconnect.tools
+                db_provider.transport = reconnect.transport.value
 
                 result = ToolTransformService.mcp_provider_to_user_provider(db_provider, for_list=True)
         except Exception:
@@ -1499,17 +1501,26 @@ class ToolMCPAuthApi(Resource):
                 headers=headers,
                 timeout=provider_entity.timeout,
                 sse_read_timeout=provider_entity.sse_read_timeout,
-            ):
-                # Update credentials in new transaction
-                with sessionmaker(db.engine).begin() as session:
-                    service = MCPToolManageService(session=session)
-                    service.update_provider_credentials(
+                transport=provider_entity.transport,
+            ) as mcp_client:
+                selected_transport = mcp_client.selected_transport
+
+            # Update credentials in new transaction
+            with sessionmaker(db.engine).begin() as session:
+                service = MCPToolManageService(session=session)
+                service.update_provider_credentials(
+                    provider_id=provider_id,
+                    tenant_id=tenant_id,
+                    credentials=provider_entity.credentials,
+                    authed=True,
+                )
+                if selected_transport:
+                    service.persist_transport(
                         provider_id=provider_id,
                         tenant_id=tenant_id,
-                        credentials=provider_entity.credentials,
-                        authed=True,
+                        transport=selected_transport,
                     )
-                    return MCPAuthResponse(result="success").model_dump(mode="json")
+                return MCPAuthResponse(result="success").model_dump(mode="json")
         except MCPAuthError as e:
             try:
                 # Pass the extracted OAuth metadata hints to auth()

@@ -44,6 +44,13 @@ class IdentityMode(StrEnum):
     IDP_TOKEN = "idp_token"
 
 
+class MCPTransport(StrEnum):
+    """MCP provider connection transport."""
+
+    SSE = "sse"
+    STREAMABLE_HTTP = "streamable_http"
+
+
 class MCPAuthentication(BaseModel):
     client_id: str
     client_secret: str | None = None
@@ -69,6 +76,7 @@ class MCPProviderEntity(BaseModel):
     headers: dict[str, str]  # encrypted headers
     timeout: float
     sse_read_timeout: float
+    transport: MCPTransport = MCPTransport.SSE
 
     # Authentication related
     authed: bool
@@ -99,6 +107,7 @@ class MCPProviderEntity(BaseModel):
             headers=db_provider.headers,
             timeout=db_provider.timeout,
             sse_read_timeout=db_provider.sse_read_timeout,
+            transport=MCPTransport(db_provider.transport),
             authed=db_provider.authed,
             credentials=db_provider.credentials,
             tools=db_provider.tool_dict,

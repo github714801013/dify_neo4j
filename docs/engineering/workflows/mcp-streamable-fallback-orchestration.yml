@@ -1,0 +1,309 @@
+schema_version: 3
+orchestrator_version: 3
+revision: 10
+task_id: mcp-streamable-fallback
+task:
+  title: MCP SSE 失败后回退 Streamable HTTP
+  source: 默认使用原有 SSE 连接；连接失败后测试 Streamable HTTP，成功则持久化后续连接方式
+workspace:
+  status: confirmed
+  decision: current_workspace_current_branch
+  mode: null
+  confirmed_at: '2026-08-14T03:08:28+00:00'
+  path: D:\workplace\python\dify
+  branch: neo4j-by-1.16.0-rc1
+  base_branch: null
+  base_commit: null
+  migration: null
+route: bug_fix
+flow_selection:
+  task_type: bug_fix
+  option_id: bug_fix_standard
+  selection_mode: preset
+  stage_ids:
+  - diagnosing-bugs
+  - tdd
+  - implement
+  - code-review
+  - verify
+  omitted_stages: []
+  skill_audit:
+    checked:
+    - skill: code-review
+      source: disk
+      path: C:\Users\Administrator\.claude\skills\code-review\SKILL.md
+    - skill: diagnosing-bugs
+      source: disk
+      path: C:\Users\Administrator\.claude\skills\diagnosing-bugs\SKILL.md
+    - skill: implement
+      source: builtin
+    - skill: ponytail
+      source: missing
+    - skill: tdd
+      source: disk
+      path: C:\Users\Administrator\.claude\skills\tdd\SKILL.md
+    - skill: verify
+      source: missing
+    skipped:
+    - stage_id: implement
+      skill: ponytail
+      reason: skill_initially_unavailable
+    - stage_id: verify
+      skill: verify
+      reason: skill_initially_unavailable
+route_history: []
+rollback_history: []
+code_relationship_graphs: []
+stages:
+- id: diagnosing-bugs
+  skill: diagnosing-bugs
+  mcp: null
+  execution_mode: sub_agent
+  skills:
+  - diagnosing-bugs
+  completion_gate: null
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files:
+  - path: D:/workplace/skills/my-skills/dev-spec-gen/references/debugging-evidence-specs.md
+    sha256: a1e26506b7ee185f9f71b778962d29a197c3b549ec95104db994033d53f0d9dd
+  output_files:
+  - path: mcp-streamable-fallback-diagnosis.md
+    sha256: 7c68a058a1461135701a7bba0ab0196a2eba8a45dabd597a79d87fe73289ca38
+  handoff_summary: 已建立诊断证据：GitNexus 服务端的 Streamable HTTP POST initialize 与 tools/list
+    可用；旧 SSE GET transport 与其不兼容。现有 MCPClient 根据 URL 最后路径段选择 transport，且 provider
+    数据模型没有持久化 transport 字段。pytest 当前因缺少 pydantic_settings 无法启动，已如实记录。
+  evidence:
+  - kind: verification
+    summary: 已运行源码控制流检查，确认 MCPClient._initialize 对 URL 最后路径段 mcp 直接选择 Streamable HTTP，未知路径才执行
+      SSE 后回退。
+    recorded_at: '2026-08-14T03:32:16+00:00'
+  - kind: verification
+    summary: 已运行 AST 解析，确认 _initialize 函数可被定位；线上已验证 POST initialize 返回 session 且 tools/list
+      成功，旧 SSE transport 失败。
+    recorded_at: '2026-08-14T03:32:16+00:00'
+  - kind: verification
+    summary: 已尝试运行 api/tests/unit_tests/core/mcp/test_mcp_client.py；因当前环境缺少 pydantic_settings
+      在 conftest 导入阶段失败，未将其伪称为有效通过结果。
+    recorded_at: '2026-08-14T03:32:16+00:00'
+  - kind: verification
+    summary: 已确认共享连接闸门是 MCPClient._initialize，后续最小回归 seam 应覆盖 SSE 失败、Streamable HTTP
+      成功、最终 session 使用成功 transport 与持久化落点。
+    recorded_at: '2026-08-14T03:32:16+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills: []
+  required_action: null
+  confirmed_at: '2026-08-14T03:32:16+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+- id: tdd
+  skill: tdd
+  mcp: null
+  execution_mode: sub_agent
+  skills:
+  - tdd
+  completion_gate: null
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  output_files:
+  - path: mcp-streamable-fallback-tdd.md
+    sha256: 24e2e3ad2bbed65eba292999f76b52993c45b469df4504468ef266108e25f505
+  handoff_summary: 已在 MCPClient._initialize 共享连接 seam 建立两条红色回归测试：无显式 transport 时 SSE
+    上下文建立失败后按顺序回退 Streamable HTTP 并要求记录成功模式；已有持久化 Streamable HTTP 模式时后续连接跳过 SSE。未实现生产逻辑。
+  evidence:
+  - kind: verification
+    summary: 新增 test_initialize_sse_enter_failure_then_streamable_http_success_uses_streamable_transport，覆盖
+      SSE __enter__ 失败、SSE→Streamable HTTP 调用顺序、完整连接参数、session.initialize 与成功模式状态。
+    recorded_at: '2026-08-14T03:52:26+00:00'
+  - kind: verification
+    summary: 新增 test_initialize_reuses_persisted_streamable_transport，要求 transport=streamable_http
+      时直接使用 Streamable HTTP，且不得调用 SSE。
+    recorded_at: '2026-08-14T03:52:26+00:00'
+  - kind: verification
+    summary: 已运行 python -m py_compile api/tests/unit_tests/core/mcp/test_mcp_client.py
+      与 git diff --check，均通过。
+    recorded_at: '2026-08-14T03:52:26+00:00'
+  - kind: verification
+    summary: pytest 目标命令在 collection 阶段因环境缺少 pydantic_settings 失败；未安装依赖，未伪称为红测执行成功。
+    recorded_at: '2026-08-14T03:52:26+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills: []
+  required_action: null
+  confirmed_at: '2026-08-14T03:52:26+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+- id: implement
+  skill: implement
+  mcp: null
+  execution_mode: main_agent
+  skills:
+  - ponytail
+  - implement
+  completion_gate: null
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  output_files:
+  - path: mcp-streamable-fallback-implementation.md
+    sha256: d7ac69516f7df33171ff74882135d71bcac92d2566ce4df291ee0b0d07f78292
+  handoff_summary: 已实现 MCP provider transport 持久化：未探测连接 SSE 优先，失败后回退 Streamable HTTP；成功结果写入
+    provider，工具刷新、授权和运行时调用会读取并复用该模式。新增迁移为既有 provider 安全默认 SSE。
+  evidence:
+  - kind: verification
+    summary: MCPClient 仅在 transport=streamable_http 时跳过 SSE；否则尝试 SSE，连接失败后关闭失败资源并回退
+      Streamable HTTP，且暴露 selected_transport。
+    recorded_at: '2026-08-14T04:44:09+00:00'
+  - kind: verification
+    summary: 新增 tool_mcp_providers.transport 迁移，默认 sse；entity、认证重试、管理服务、控制器和 MCP 工具运行时已传递并持久化该字段。
+    recorded_at: '2026-08-14T04:44:09+00:00'
+  - kind: verification
+    summary: 已运行 MCP transport 定向测试：3 passed, 34 deselected；覆盖 /mcp URL SSE 优先与回退、SSE
+      __enter__ 失败后的回退、已保存 Streamable HTTP 的直接复用。
+    recorded_at: '2026-08-14T04:44:09+00:00'
+  - kind: verification
+    summary: 已运行 py_compile 和 git diff --check，均通过。完整 MCP 客户端测试的两项 Flask fixture 在当前环境因
+      Flask(test) 初始化 StopIteration 失败，为既有环境问题。
+    recorded_at: '2026-08-14T04:44:09+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills:
+  - ponytail
+  required_action: null
+  confirmed_at: '2026-08-14T04:44:09+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+- id: code-review
+  skill: code-review
+  mcp: null
+  execution_mode: main_agent
+  skills:
+  - code-review
+  completion_gate: null
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  output_files:
+  - path: mcp-streamable-fallback-code-review.md
+    sha256: 59cae2e1402385ffa63c8031f9cf7485036731d639fa978b1502073a16f07649
+  handoff_summary: 已完成本地代码审查并修复审查发现的阻断项：所有 URL 默认 SSE 优先、授权和运行时完整读写 transport、工具列表传递
+    transport、URL 更新保存本次连接结果。独立审查代理隔离工作树无法读取主工作区未提交差异，已如实登记而非误报通过。
+  evidence:
+  - kind: verification
+    summary: 已执行 py_compile、git diff --check 和 3 条 MCP transport 定向测试，均通过。
+    recorded_at: '2026-08-14T04:48:21+00:00'
+  - kind: verification
+    summary: 已核验没有将 transport 混入 OAuth credentials；数据库迁移默认 SSE，既有 provider 保持兼容。
+    recorded_at: '2026-08-14T04:48:21+00:00'
+  - kind: verification
+    summary: 独立审查发现的默认策略、授权持久化、get_tools 传播和 URL 更新持久化问题均已修复并复验。
+    recorded_at: '2026-08-14T04:48:21+00:00'
+  - kind: verification
+    summary: 独立 Standards/Spec 审查代理无法从隔离工作树读取主工作区未提交 diff，未将其结果表述为通过。
+    recorded_at: '2026-08-14T04:48:21+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills: []
+  required_action: null
+  confirmed_at: '2026-08-14T04:48:21+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+- id: verify
+  skill: verify
+  mcp: null
+  execution_mode: sub_agent
+  skills:
+  - verify
+  completion_gate: null
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  output_files:
+  - path: mcp-streamable-fallback-verification.md
+    sha256: 0985157b8b96d3cd68f743338c18ac82d353e1dd80d7bf677fda7f9f2da668ea
+  handoff_summary: 主工作区完成定向验证：SSE 优先、失败回退 Streamable HTTP、成功模式复用三项测试均通过；编译与 diff 检查通过。隔离验证无法看到主工作区未提交差异和缺少依赖的限制已如实记录。
+  evidence: &id001
+  - kind: verification
+    summary: 主工作区 MCP transport 定向测试结果：3 passed, 34 deselected。
+    recorded_at: '2026-08-14T04:53:16+00:00'
+  - kind: verification
+    summary: 覆盖 /mcp SSE 优先并回退、SSE __enter__ 失败回退、streamable_http 已保存后的直接复用。
+    recorded_at: '2026-08-14T04:53:16+00:00'
+  - kind: verification
+    summary: py_compile 和 git diff --check 通过。
+    recorded_at: '2026-08-14T04:53:16+00:00'
+  - kind: verification
+    summary: 完整 MCP 客户端测试有两项既有 Flask fixture 初始化失败；隔离验证代理不能读取主工作区未提交 diff，均未被误报为本次功能缺陷。
+    recorded_at: '2026-08-14T04:53:16+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills:
+  - verify
+  required_action: null
+  confirmed_at: '2026-08-14T04:53:16+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+current_stage: verify
+current_skill: verify
+stage_status: complete
+next_skill: null
+resume_from: completed
+continuation_mode: auto
+required_action: null
+handoff_summary: 阶段 verify 已完成，任务编排中的全部阶段已结束。
+evidence: *id001
+blocked_reason: null
+failure_evidence: []
+invalidated_outputs: []
+limits:
+  handoff_summary_max_chars: 1200
+  evidence_summary_max_chars: 500
+  max_inline_evidence_items: 20
+updated_at: '2026-08-14T04:53:16+00:00'
+initialization:
+  selection_id: wRw-bU5jB94YKj81qGHhCg
+  purpose: init
+  selection_stage: final
+  chosen_at: '2026-08-14T03:12:15+00:00'
+  definition:
+    path: ''
+    sha256: ''
+  stages_sha256: be01e7883f6a10efc54bd1c59e309db6b1227b811b69b66020d346cb7218a105
+  provenance: cli_selection
