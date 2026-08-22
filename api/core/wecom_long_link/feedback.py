@@ -93,6 +93,15 @@ class FeedbackCoordinator:
         self._completed = True
         self._pending = False
 
+    def on_failed(self, content: str) -> None:
+        """Send one terminal frame for an application failure."""
+        if self._completed or not isinstance(content, str) or not content:
+            return
+        self._completed = True
+        self._pending = False
+        self._pending_answer = ""
+        self._send(FeedbackFrame(self.stream_id, content, True))
+
     def on_disconnected(self) -> None:
         """停止断流后的定时更新，不改变已发送内容。"""
         self._pending = False

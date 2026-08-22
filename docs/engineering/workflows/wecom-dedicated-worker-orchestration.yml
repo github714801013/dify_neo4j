@@ -1,0 +1,1569 @@
+schema_version: 3
+orchestrator_version: 3
+revision: 19
+task_id: wecom-dedicated-worker
+task:
+  title: 企业微信长连接拆分独立 Worker
+  source: 进一步拆分为独立 Worker
+workspace:
+  status: confirmed
+  decision: current_workspace_current_branch
+  mode: null
+  confirmed_at: '2026-08-22T00:58:02+00:00'
+  path: D:\workplace\python\dify
+  branch: neo4j-by-1.16.0-rc1
+  base_branch: null
+  base_commit: null
+  migration: null
+route: development
+flow_definition:
+  version: 1
+  task_type: development
+  option_id: development_standard
+  name: 标准需求开发
+  purpose: 适用于需要完整规格、任务拆分、TDD、实现、评审和验证的项目需求。
+  stage_ids:
+  - gitnexus-inquiry
+  - workspace-confirm
+  - grill-with-docs
+  - to-spec
+  - to-tickets
+  - implement
+  - code-review
+  - verify
+  stages:
+  - id: gitnexus-inquiry
+    skill: null
+    mcp:
+      server: remote_gitnexus
+      tools:
+      - query
+      - context
+      - code_snippet
+      - impact
+      - trace
+      fallback: local_workspace_search
+      scope: current_workspace
+    execution_mode: sub_agent
+    kind: mcp
+    host_action: null
+    reference_mutation: false
+    skills: []
+    agent_prompt: 按节点 mcp 配置执行一次主 query 后仅复核命中结果。scope={scope} 限定取证范围；服务或索引不可用才允许受限本地检索，本地证据标记
+      source=local_search、authority=non_gitnexus。
+    orchestration_mode: mcp_prompt
+    evidence_policy:
+      gitnexus_first: true
+      require_query_record: true
+      allow_local_fallback: true
+      local_fallback_only_when:
+      - repository_unindexed
+      - service_unavailable
+      - authorization_unavailable
+      - timeout
+      - index_stale
+      - aggregate_unsupported
+      - capability_unavailable
+      local_search_root: workspace.path
+      local_evidence_source: local_search
+      local_evidence_authority: non_gitnexus
+      local_search_cannot_prove:
+      - call_graph
+      - impact
+      - cross_project_trace
+      - complete_consumers
+    completion_gate:
+      id: inquiry_record
+      require_evidence: true
+      require_output_files: false
+    confirmation_policy:
+      mode: user_confirmation
+      action: execute_gitnexus_inquiry
+      prompt: 执行只读 GitNexus 调研（scope={scope}）；按节点 mcp 配置写入正式调研记录，不修改工作区或外部系统。调研是否执行必须由用户确认；未确认不得派发执行
+        Agent。
+      allow_skip: research_not_needed
+      reuse: same_task_readonly_exact
+    status_transitions:
+      pending:
+      - in_progress
+      - blocked
+      - awaiting
+      - skipped
+      in_progress:
+      - complete
+      - blocked
+      - awaiting
+      - skipped
+      blocked:
+      - in_progress
+      - awaiting
+      awaiting:
+      - in_progress
+      - blocked
+      - skipped
+      complete: []
+      skipped: []
+    decision_record_path: null
+    inquiry_record_path: plans/wecom-dedicated-worker-gitnexus-inquiry.md
+    status: pending
+    required_files: []
+    reference_topics:
+    - topic: research
+      index_path: research/index.yml
+      path: gitnexus
+      max_level: 3
+    - topic: shared
+      index_path: shared/index.yml
+      path: .
+      max_level: 2
+    reference_topics_snapshot: null
+    output_files: []
+    handoff_summary: ''
+    evidence: []
+    blocked_reason: null
+    failure_evidence: []
+    skip_reason: null
+    skip_basis: null
+    initially_unavailable_skills: []
+    required_action: null
+    confirmed_at: null
+    confirmation_request: null
+    answer_confirmation_request: null
+    question_choice_request: null
+    question_choices: []
+    authorizations: []
+    answer_confirmations: []
+    host_action_baseline: null
+  - id: workspace-confirm
+    skill: null
+    mcp: null
+    execution_mode: main_agent
+    kind: host_action
+    host_action:
+      id: workspace_confirm
+      purpose: 呈现并确认当前任务的工作区绑定（decision、branch、base_branch），用户可修改 base 分支后重新预检。
+      steps:
+      - 呈现当前任务绑定的工作区：decision、path、branch、base_branch（默认当前分支）。
+      - 向用户确认绑定；用户要求修改 base 分支时，重新执行 workspace-options 预检并更新绑定。
+      - 回写 host_action_result 精确 5 字段：decision、branch、base_branch、base_commit、confirmed_at；当前分支或复用
+        worktree 的 base 两字段为 null，新建模式与 canonical 一致；用户确认文本写入 evidence。
+    reference_mutation: false
+    skills: []
+    agent_prompt: null
+    orchestration_mode: null
+    evidence_policy: null
+    completion_gate:
+      id: workspace_confirmation_evidence
+      require_evidence: true
+      require_output_files: false
+    confirmation_policy:
+      mode: none
+    status_transitions:
+      pending:
+      - in_progress
+      - blocked
+      - awaiting
+      - skipped
+      in_progress:
+      - complete
+      - blocked
+      - awaiting
+      - skipped
+      blocked:
+      - in_progress
+      - awaiting
+      awaiting:
+      - in_progress
+      - blocked
+      - skipped
+      complete: []
+      skipped: []
+    decision_record_path: null
+    inquiry_record_path: null
+    status: pending
+    required_files: []
+    reference_topics: []
+    reference_topics_snapshot: null
+    output_files: []
+    handoff_summary: ''
+    evidence: []
+    blocked_reason: null
+    failure_evidence: []
+    skip_reason: null
+    skip_basis: null
+    initially_unavailable_skills: []
+    required_action: null
+    confirmed_at: null
+    confirmation_request: null
+    answer_confirmation_request: null
+    question_choice_request: null
+    question_choices: []
+    authorizations: []
+    answer_confirmations: []
+    host_action_baseline: null
+  - id: grill-with-docs
+    skill: grill-with-docs
+    mcp: null
+    execution_mode: main_agent
+    kind: skill
+    host_action: null
+    reference_mutation: false
+    skills:
+    - grill-with-docs
+    agent_prompt: 核验节点公开的 skill_md_path/skill_md_sha256 后按 SKILL.md 执行。每轮提问让用户二选一：直接回答或委派二级查询
+      Agent；必须先 submit-node 登记 question_choice（round_id/questions/options），用户选择后 choose-question-node
+      记录；子 Agent 只返回结构化 handoff，资料回答须用户接受确认。
+    orchestration_mode: nested_sub_orchestration
+    evidence_policy: null
+    completion_gate:
+      id: evidence
+      require_evidence: true
+      require_output_files: false
+    confirmation_policy:
+      mode: skill_defined
+    status_transitions:
+      pending:
+      - in_progress
+      - blocked
+      - awaiting
+      - skipped
+      in_progress:
+      - complete
+      - blocked
+      - awaiting
+      - skipped
+      blocked:
+      - in_progress
+      - awaiting
+      awaiting:
+      - in_progress
+      - blocked
+      - skipped
+      complete: []
+      skipped: []
+    decision_record_path: null
+    inquiry_record_path: null
+    status: pending
+    required_files: []
+    reference_topics:
+    - topic: grill
+      index_path: grill/index.yml
+      path: interaction
+      max_level: 3
+    - topic: shared
+      index_path: shared/index.yml
+      path: .
+      max_level: 2
+    reference_topics_snapshot: null
+    output_files: []
+    handoff_summary: ''
+    evidence: []
+    blocked_reason: null
+    failure_evidence: []
+    skip_reason: null
+    skip_basis: null
+    initially_unavailable_skills: []
+    required_action: null
+    confirmed_at: null
+    confirmation_request: null
+    answer_confirmation_request: null
+    question_choice_request: null
+    question_choices: []
+    authorizations: []
+    answer_confirmations: []
+    host_action_baseline: null
+  - id: to-spec
+    skill: to-spec
+    mcp: null
+    execution_mode: sub_agent
+    kind: skill
+    host_action: null
+    reference_mutation: false
+    skills:
+    - to-spec
+    agent_prompt: null
+    orchestration_mode: null
+    evidence_policy: null
+    completion_gate:
+      id: specification_evidence
+      require_evidence: true
+      require_output_files: false
+    confirmation_policy:
+      mode: none
+    status_transitions:
+      pending:
+      - in_progress
+      - blocked
+      - awaiting
+      - skipped
+      in_progress:
+      - complete
+      - blocked
+      - awaiting
+      - skipped
+      blocked:
+      - in_progress
+      - awaiting
+      awaiting:
+      - in_progress
+      - blocked
+      - skipped
+      complete: []
+      skipped: []
+    decision_record_path: null
+    inquiry_record_path: null
+    status: pending
+    required_files: []
+    reference_topics:
+    - topic: routing
+      index_path: routing/index.yml
+      path: core
+      max_level: 3
+    - topic: orchestration
+      index_path: orchestration/index.yml
+      path: contracts
+      max_level: 3
+    reference_topics_snapshot: null
+    output_files: []
+    handoff_summary: ''
+    evidence: []
+    blocked_reason: null
+    failure_evidence: []
+    skip_reason: null
+    skip_basis: null
+    initially_unavailable_skills: []
+    required_action: null
+    confirmed_at: null
+    confirmation_request: null
+    answer_confirmation_request: null
+    question_choice_request: null
+    question_choices: []
+    authorizations: []
+    answer_confirmations: []
+    host_action_baseline: null
+  - id: to-tickets
+    skill: to-tickets
+    mcp: null
+    execution_mode: sub_agent
+    kind: skill
+    host_action: null
+    reference_mutation: false
+    skills:
+    - to-tickets
+    agent_prompt: null
+    orchestration_mode: null
+    evidence_policy: null
+    completion_gate:
+      id: ticket_evidence
+      require_evidence: true
+      require_output_files: false
+    confirmation_policy:
+      mode: none
+    status_transitions:
+      pending:
+      - in_progress
+      - blocked
+      - awaiting
+      - skipped
+      in_progress:
+      - complete
+      - blocked
+      - awaiting
+      - skipped
+      blocked:
+      - in_progress
+      - awaiting
+      awaiting:
+      - in_progress
+      - blocked
+      - skipped
+      complete: []
+      skipped: []
+    decision_record_path: null
+    inquiry_record_path: null
+    status: pending
+    required_files: []
+    reference_topics:
+    - topic: delivery
+      index_path: delivery/index.yml
+      path: tickets
+      max_level: 3
+    - topic: orchestration
+      index_path: orchestration/index.yml
+      path: contracts
+      max_level: 3
+    reference_topics_snapshot: null
+    output_files: []
+    handoff_summary: ''
+    evidence: []
+    blocked_reason: null
+    failure_evidence: []
+    skip_reason: null
+    skip_basis: null
+    initially_unavailable_skills: []
+    required_action: null
+    confirmed_at: null
+    confirmation_request: null
+    answer_confirmation_request: null
+    question_choice_request: null
+    question_choices: []
+    authorizations: []
+    answer_confirmations: []
+    host_action_baseline: null
+  - id: implement
+    skill: implement
+    mcp: null
+    execution_mode: main_agent
+    kind: skill
+    host_action: null
+    reference_mutation: false
+    skills:
+    - ponytail
+    - tdd
+    - implement
+    agent_prompt: 按 skills 列表顺序在同一上下文执行全部 Skill，任一未完成或阻塞不得交接。只运行当前需求相关测试及最小回归，不得扩大到无关全量；完成时提供测试命令、范围、退出码与跳过项证据；tdd
+      时不执行编译。
+    orchestration_mode: null
+    evidence_policy: null
+    completion_gate:
+      id: implementation_evidence
+      require_evidence: true
+      require_output_files: false
+    confirmation_policy:
+      mode: none
+    status_transitions:
+      pending:
+      - in_progress
+      - blocked
+      - awaiting
+      - skipped
+      in_progress:
+      - complete
+      - blocked
+      - awaiting
+      - skipped
+      blocked:
+      - in_progress
+      - awaiting
+      awaiting:
+      - in_progress
+      - blocked
+      - skipped
+      complete: []
+      skipped: []
+    decision_record_path: null
+    inquiry_record_path: null
+    status: pending
+    required_files: []
+    reference_topics:
+    - topic: engineering
+      index_path: engineering/index.yml
+      path: .
+      max_level: 3
+    - topic: quality
+      index_path: quality/index.yml
+      path: .
+      max_level: 3
+    - topic: shared
+      index_path: shared/index.yml
+      path: .
+      max_level: 2
+    reference_topics_snapshot: null
+    output_files: []
+    handoff_summary: ''
+    evidence: []
+    blocked_reason: null
+    failure_evidence: []
+    skip_reason: null
+    skip_basis: null
+    initially_unavailable_skills:
+    - ponytail
+    required_action: null
+    confirmed_at: null
+    confirmation_request: null
+    answer_confirmation_request: null
+    question_choice_request: null
+    question_choices: []
+    authorizations: []
+    answer_confirmations: []
+    host_action_baseline: null
+  - id: code-review
+    skill: code-review
+    mcp: null
+    execution_mode: main_agent
+    kind: skill
+    host_action: null
+    reference_mutation: false
+    skills:
+    - code-review
+    agent_prompt: 主 Agent 必须直接审核本次修改文件相对 HEAD 的未提交改动，以 git diff HEAD 为范围；无未提交差异时如实记录范围为空，不得猜测提交范围，不审查
+      HEAD^..HEAD。
+    orchestration_mode: null
+    evidence_policy: null
+    completion_gate:
+      id: review_evidence
+      require_evidence: true
+      require_output_files: false
+    confirmation_policy:
+      mode: none
+    status_transitions:
+      pending:
+      - in_progress
+      - blocked
+      - awaiting
+      - skipped
+      in_progress:
+      - complete
+      - blocked
+      - awaiting
+      - skipped
+      blocked:
+      - in_progress
+      - awaiting
+      awaiting:
+      - in_progress
+      - blocked
+      - skipped
+      complete: []
+      skipped: []
+    decision_record_path: null
+    inquiry_record_path: null
+    status: pending
+    required_files: []
+    reference_topics:
+    - topic: quality
+      index_path: quality/index.yml
+      path: .
+      max_level: 3
+    - topic: delivery
+      index_path: delivery/index.yml
+      path: git
+      max_level: 3
+    - topic: shared
+      index_path: shared/index.yml
+      path: .
+      max_level: 2
+    reference_topics_snapshot: null
+    output_files: []
+    handoff_summary: ''
+    evidence: []
+    blocked_reason: null
+    failure_evidence: []
+    skip_reason: null
+    skip_basis: null
+    initially_unavailable_skills: []
+    required_action: null
+    confirmed_at: null
+    confirmation_request: null
+    answer_confirmation_request: null
+    question_choice_request: null
+    question_choices: []
+    authorizations: []
+    answer_confirmations: []
+    host_action_baseline: null
+  - id: verify
+    skill: verify
+    mcp: null
+    execution_mode: sub_agent
+    kind: skill
+    host_action: null
+    reference_mutation: false
+    skills:
+    - verify
+    agent_prompt: null
+    orchestration_mode: null
+    evidence_policy: null
+    completion_gate:
+      id: verification_evidence
+      require_evidence: true
+      require_output_files: false
+    confirmation_policy:
+      mode: none
+    status_transitions:
+      pending:
+      - in_progress
+      - blocked
+      - awaiting
+      - skipped
+      in_progress:
+      - complete
+      - blocked
+      - awaiting
+      - skipped
+      blocked:
+      - in_progress
+      - awaiting
+      awaiting:
+      - in_progress
+      - blocked
+      - skipped
+      complete: []
+      skipped: []
+    decision_record_path: null
+    inquiry_record_path: null
+    status: pending
+    required_files: []
+    reference_topics:
+    - topic: quality
+      index_path: quality/index.yml
+      path: .
+      max_level: 3
+    - topic: delivery
+      index_path: delivery/index.yml
+      path: .
+      max_level: 3
+    reference_topics_snapshot: null
+    output_files: []
+    handoff_summary: ''
+    evidence: []
+    blocked_reason: null
+    failure_evidence: []
+    skip_reason: null
+    skip_basis: null
+    initially_unavailable_skills:
+    - verify
+    required_action: null
+    confirmed_at: null
+    confirmation_request: null
+    answer_confirmation_request: null
+    question_choice_request: null
+    question_choices: []
+    authorizations: []
+    answer_confirmations: []
+    host_action_baseline: null
+  transitions:
+    complete:
+      workspace-confirm: grill-with-docs
+      grill-with-docs: to-spec
+      to-spec: to-tickets
+      to-tickets: implement
+      implement: code-review
+      code-review: verify
+      verify: null
+      gitnexus-inquiry: workspace-confirm
+    skipped:
+      workspace-confirm: grill-with-docs
+      grill-with-docs: to-spec
+      to-spec: to-tickets
+      to-tickets: implement
+      implement: code-review
+      code-review: verify
+      verify: null
+      gitnexus-inquiry: workspace-confirm
+  flow_catalog:
+    version: 1
+    path: D:\workplace\skills\my-skills\dev-spec-gen\references\flow-catalog.yml
+    sha256: 9cd88b3a115cb04b217a56bb57d430cc54c3df6788f8d5516aa862d3bd554f82
+  research_mode: current_workspace_research
+flow_selection:
+  task_type: development
+  option_id: development_standard
+  selection_mode: preset
+  stage_ids:
+  - gitnexus-inquiry
+  - workspace-confirm
+  - grill-with-docs
+  - to-spec
+  - to-tickets
+  - implement
+  - code-review
+  - verify
+  omitted_stages: []
+  skill_audit:
+    checked:
+    - skill: code-review
+      source: disk
+      path: C:\Users\Administrator\.claude\skills\code-review\SKILL.md
+    - skill: grill-with-docs
+      source: disk
+      path: C:\Users\Administrator\.claude\skills\grill-with-docs\SKILL.md
+    - skill: implement
+      source: builtin
+    - skill: ponytail
+      source: missing
+    - skill: tdd
+      source: disk
+      path: C:\Users\Administrator\.claude\skills\tdd\SKILL.md
+    - skill: to-spec
+      source: disk
+      path: C:\Users\Administrator\.claude\skills\to-spec\SKILL.md
+    - skill: to-tickets
+      source: disk
+      path: C:\Users\Administrator\.claude\skills\to-tickets\SKILL.md
+    - skill: verify
+      source: missing
+    skipped:
+    - stage_id: implement
+      skill: ponytail
+      reason: skill_initially_unavailable
+    - stage_id: implement-no-tdd
+      skill: ponytail
+      reason: skill_initially_unavailable
+    - stage_id: verify
+      skill: verify
+      reason: skill_initially_unavailable
+  research_mode: current_workspace_research
+  research_mode_choice:
+    choice: current_workspace_research
+    chosen_at: '2026-08-22T01:05:22+00:00'
+    source: cli
+  name: 标准需求开发
+  purpose: 适用于需要完整规格、任务拆分、TDD、实现、评审和验证的项目需求。
+route_history: []
+rollback_history: []
+flow_selection_epoch: 0
+awaiting_flow_selection: null
+code_relationship_graphs: []
+stages:
+- id: gitnexus-inquiry
+  skill: null
+  mcp:
+    server: remote_gitnexus
+    tools:
+    - query
+    - context
+    - code_snippet
+    - impact
+    - trace
+    fallback: local_workspace_search
+    scope: current_workspace
+  execution_mode: sub_agent
+  kind: mcp
+  host_action: null
+  reference_mutation: false
+  skills: []
+  agent_prompt: 按节点 mcp 配置执行一次主 query 后仅复核命中结果。scope={scope} 限定取证范围；服务或索引不可用才允许受限本地检索，本地证据标记
+    source=local_search、authority=non_gitnexus。
+  orchestration_mode: mcp_prompt
+  evidence_policy:
+    gitnexus_first: true
+    require_query_record: true
+    allow_local_fallback: true
+    local_fallback_only_when:
+    - repository_unindexed
+    - service_unavailable
+    - authorization_unavailable
+    - timeout
+    - index_stale
+    - aggregate_unsupported
+    - capability_unavailable
+    local_search_root: workspace.path
+    local_evidence_source: local_search
+    local_evidence_authority: non_gitnexus
+    local_search_cannot_prove:
+    - call_graph
+    - impact
+    - cross_project_trace
+    - complete_consumers
+  completion_gate:
+    id: inquiry_record
+    require_evidence: true
+    require_output_files: false
+  confirmation_policy:
+    mode: user_confirmation
+    action: execute_gitnexus_inquiry
+    prompt: 执行只读 GitNexus 调研（scope={scope}）；按节点 mcp 配置写入正式调研记录，不修改工作区或外部系统。调研是否执行必须由用户确认；未确认不得派发执行
+      Agent。
+    allow_skip: research_not_needed
+    reuse: same_task_readonly_exact
+  status_transitions:
+    pending:
+    - in_progress
+    - blocked
+    - awaiting
+    - skipped
+    in_progress:
+    - complete
+    - blocked
+    - awaiting
+    - skipped
+    blocked:
+    - in_progress
+    - awaiting
+    awaiting:
+    - in_progress
+    - blocked
+    - skipped
+    complete: []
+    skipped: []
+  decision_record_path: null
+  inquiry_record_path: plans/wecom-dedicated-worker-gitnexus-inquiry.md
+  status: complete
+  required_files: []
+  reference_topics:
+  - topic: research
+    index_path: research/index.yml
+    path: gitnexus
+    max_level: 3
+  - topic: shared
+    index_path: shared/index.yml
+    path: .
+    max_level: 2
+  reference_topics_snapshot:
+  - topic: research
+    index_path: research/index.yml
+    path: gitnexus
+    max_level: 3
+    index_sha256: 56dfe4333d79dbff990cb814a5dd308e1df662236c3437da7459b54c6d0c7b9a
+  - topic: shared
+    index_path: shared/index.yml
+    path: .
+    max_level: 2
+    index_sha256: c74404a5749e0556cc96f992aa282b8a16abbe903593bf845280c793c70be032
+  output_files:
+  - path: plans/wecom-dedicated-worker-gitnexus-inquiry.md
+    sha256: b7dbbbda1ce880f1b78d3acb990697184c14b98a17bc01a4ea51cd94d692589e
+  handoff_summary: GitNexus 主查询未能定位当前 Dify repo：未指定 repo 的结果来自其他仓库，显式 repo 路径不可用。已按规则降级为受限本地检索，确认当前
+    WeCom 只是在同一 worker 容器内由 supervisor 与 Celery 分进程运行；部署尚无容器级专用 WeCom service。
+  evidence:
+  - kind: verification
+    summary: GitNexus 显式 repo=D:/workplace/python/dify 返回 Repository is not available
+      through this MCP server；未把其他仓库的聚合结果当作当前项目事实。
+    recorded_at: '2026-08-22T01:14:46+00:00'
+  - kind: verification
+    summary: 本地 source=local_search、authority=non_gitnexus：api/docker/entrypoint.sh:65-72
+      在 WECOM_LONG_LINK_ENABLED=true 时执行 supervisor；api/core/wecom_long_link/supervisor.py:42-46
+      同时启动 Celery 和 WeCom worker 子进程。
+    recorded_at: '2026-08-22T01:14:46+00:00'
+  - kind: verification
+    summary: 本地 source=local_search、authority=non_gitnexus：docker/deploy.sh:312-350
+      只有通用 worker 与 worker_graph，worker_graph 明确关闭 WeCom 长连接，没有专用 wecom_worker service。
+    recorded_at: '2026-08-22T01:14:46+00:00'
+  - kind: verification
+    summary: 已记录 Flask/DB/Redis 上下文、租户 gather、reconciler 生命周期、测试边界、多副本 lease 和部署拓扑的未确认项；未修改生产代码或配置。
+    recorded_at: '2026-08-22T01:14:46+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills: []
+  required_action: null
+  confirmed_at: '2026-08-22T01:14:46+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations:
+  - action: execute_gitnexus_inquiry
+    command: 执行只读 GitNexus 调研（scope=current_workspace）
+    authorization: 确认执行：在当前工作区范围内进行独立 Worker 拆分的只读代码调研；优先 GitNexus，不修改代码、配置或外部系统
+    authorized_at: '2026-08-22T01:09:37+00:00'
+  answer_confirmations: []
+  host_action_baseline: null
+- id: workspace-confirm
+  skill: null
+  mcp: null
+  execution_mode: main_agent
+  kind: host_action
+  host_action:
+    id: workspace_confirm
+    purpose: 呈现并确认当前任务的工作区绑定（decision、branch、base_branch），用户可修改 base 分支后重新预检。
+    steps:
+    - 呈现当前任务绑定的工作区：decision、path、branch、base_branch（默认当前分支）。
+    - 向用户确认绑定；用户要求修改 base 分支时，重新执行 workspace-options 预检并更新绑定。
+    - 回写 host_action_result 精确 5 字段：decision、branch、base_branch、base_commit、confirmed_at；当前分支或复用
+      worktree 的 base 两字段为 null，新建模式与 canonical 一致；用户确认文本写入 evidence。
+  reference_mutation: false
+  skills: []
+  agent_prompt: null
+  orchestration_mode: null
+  evidence_policy: null
+  completion_gate:
+    id: workspace_confirmation_evidence
+    require_evidence: true
+    require_output_files: false
+  confirmation_policy:
+    mode: none
+  status_transitions:
+    pending:
+    - in_progress
+    - blocked
+    - awaiting
+    - skipped
+    in_progress:
+    - complete
+    - blocked
+    - awaiting
+    - skipped
+    blocked:
+    - in_progress
+    - awaiting
+    awaiting:
+    - in_progress
+    - blocked
+    - skipped
+    complete: []
+    skipped: []
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  reference_topics: []
+  reference_topics_snapshot: []
+  output_files: []
+  handoff_summary: 用户确认在当前工作区当前分支继续独立 WeCom Worker 的规格、实现和测试。
+  evidence:
+  - kind: verification
+    summary: 用户选择当前工作区当前分支。
+    recorded_at: '2026-08-22T01:29:28+00:00'
+  - kind: verification
+    summary: 用户明确授权继续独立 WeCom Worker 开发；本任务工作区为 D:/workplace/python/dify，分支 neo4j-by-1.16.0-rc1。
+    recorded_at: '2026-08-22T01:29:28+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills: []
+  required_action: null
+  confirmed_at: '2026-08-22T01:29:28+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations:
+  - action: workspace_confirm
+    command: 确认在 D:/workplace/python/dify 的 neo4j-by-1.16.0-rc1 分支上执行独立 WeCom Worker
+      开发
+    authorization: 确认开发：在当前工作区当前分支继续独立 WeCom Worker 的规格、实现和测试
+    authorized_at: '2026-08-22T01:28:46+00:00'
+  answer_confirmations: []
+  host_action_baseline:
+    head: 6fead323b06792123bd553ac7326cdfe92753934
+    branch: neo4j-by-1.16.0-rc1
+- id: grill-with-docs
+  skill: grill-with-docs
+  mcp: null
+  execution_mode: main_agent
+  kind: skill
+  host_action: null
+  reference_mutation: false
+  skills:
+  - grill-with-docs
+  agent_prompt: 核验节点公开的 skill_md_path/skill_md_sha256 后按 SKILL.md 执行。每轮提问让用户二选一：直接回答或委派二级查询
+    Agent；必须先 submit-node 登记 question_choice（round_id/questions/options），用户选择后 choose-question-node
+    记录；子 Agent 只返回结构化 handoff，资料回答须用户接受确认。
+  orchestration_mode: nested_sub_orchestration
+  evidence_policy: null
+  completion_gate:
+    id: evidence
+    require_evidence: true
+    require_output_files: false
+  confirmation_policy:
+    mode: skill_defined
+  status_transitions:
+    pending:
+    - in_progress
+    - blocked
+    - awaiting
+    - skipped
+    in_progress:
+    - complete
+    - blocked
+    - awaiting
+    - skipped
+    blocked:
+    - in_progress
+    - awaiting
+    awaiting:
+    - in_progress
+    - blocked
+    - skipped
+    complete: []
+    skipped: []
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  reference_topics:
+  - topic: grill
+    index_path: grill/index.yml
+    path: interaction
+    max_level: 3
+  - topic: shared
+    index_path: shared/index.yml
+    path: .
+    max_level: 2
+  reference_topics_snapshot:
+  - topic: grill
+    index_path: grill/index.yml
+    path: interaction
+    max_level: 3
+    index_sha256: 59bfd6fc25ff5bbd54afde332e939f9e00541f634326dfa67fef9a3a15a8319e
+  - topic: shared
+    index_path: shared/index.yml
+    path: .
+    max_level: 2
+    index_sha256: c74404a5749e0556cc96f992aa282b8a16abbe903593bf845280c793c70be032
+  output_files:
+  - path: plans/wecom-dedicated-worker-design.md
+    sha256: f7a78d144112c29aadc45acfd23f2d5a97994bd99460937e08dd5d91d0d4d453
+  handoff_summary: 完成独立 Worker 需求澄清：新增同 API 镜像的 wecom_worker Compose service，MODE=wecom_long_link
+    直接运行专用模块；通用 worker/graph worker 关闭 WeCom，单副本承载全部租户，复用 env/DB/Redis/Plugin/Sandbox/storage，原子切换与可回滚。App
+    失败保持 WebSocket 并发送固定终止帧。
+  evidence:
+  - kind: verification
+    summary: 用户确认本轮所有推荐决策：拓扑、单副本、依赖、生命周期、健康检查、原子切换、配置刷新、状态复用和验收范围。
+    recorded_at: '2026-08-22T01:50:31+00:00'
+  - kind: verification
+    summary: 已记录服务边界、连接所有权、App 失败、终止帧等领域术语，以及不在范围事项。
+    recorded_at: '2026-08-22T01:50:31+00:00'
+  - kind: verification
+    summary: GitNexus 当前 Dify repo 不可用；调研报告明确披露了 GitNexus 失败和 local_search/non_gitnexus
+      证据边界。
+    recorded_at: '2026-08-22T01:50:31+00:00'
+  - kind: verification
+    summary: 未修改生产代码、测试或 Compose 配置；仅生成设计决策文档。
+    recorded_at: '2026-08-22T01:50:31+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills: []
+  required_action: null
+  confirmed_at: '2026-08-22T01:50:31+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+  host_action_baseline: null
+- id: to-spec
+  skill: to-spec
+  mcp: null
+  execution_mode: sub_agent
+  kind: skill
+  host_action: null
+  reference_mutation: false
+  skills:
+  - to-spec
+  agent_prompt: null
+  orchestration_mode: null
+  evidence_policy: null
+  completion_gate:
+    id: specification_evidence
+    require_evidence: true
+    require_output_files: false
+  confirmation_policy:
+    mode: none
+  status_transitions:
+    pending:
+    - in_progress
+    - blocked
+    - awaiting
+    - skipped
+    in_progress:
+    - complete
+    - blocked
+    - awaiting
+    - skipped
+    blocked:
+    - in_progress
+    - awaiting
+    awaiting:
+    - in_progress
+    - blocked
+    - skipped
+    complete: []
+    skipped: []
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  reference_topics:
+  - topic: routing
+    index_path: routing/index.yml
+    path: core
+    max_level: 3
+  - topic: orchestration
+    index_path: orchestration/index.yml
+    path: contracts
+    max_level: 3
+  reference_topics_snapshot:
+  - topic: routing
+    index_path: routing/index.yml
+    path: core
+    max_level: 3
+    index_sha256: 23863f1340b8e057207c7e5df961d389ee5e7111de0eebc15f64a4836422e515
+  - topic: orchestration
+    index_path: orchestration/index.yml
+    path: contracts
+    max_level: 3
+    index_sha256: 663062d9f9eb81b064472a178d93329d377d679d45ca8af2181155e7cf51b893
+  output_files:
+  - path: specs/2026-08-22-wecom-dedicated-worker-spec.md
+    sha256: a59b31b01aba8d9db73dae77923e8f1fa7f811eb1af027c8133c34a933e7c219
+  handoff_summary: 已完成独立 WeCom Worker 正式规格：同 API 镜像新增 wecom_worker、MODE=wecom_long_link
+    直启专用模块；通用/Graph worker 关闭长连接；单副本多租户、复用 Redis/DB/env、无启动迁移、进程健康检查、原子切换、错误终止帧、900
+    秒超时和回滚验收均已明确。
+  evidence:
+  - kind: verification
+    summary: to-spec skill 文件已核验，SHA-256 与节点声明一致。
+    recorded_at: '2026-08-22T02:02:38+00:00'
+  - kind: verification
+    summary: 规格明确区分代码事实、推断和未确认项；GitNexus 不可用及 local_search/non_gitnexus 限制已披露。
+    recorded_at: '2026-08-22T02:02:38+00:00'
+  - kind: verification
+    summary: 规格覆盖启动契约、依赖/网络/挂载、租约/状态、多租户、生命周期、健康检查、SIGTERM、错误语义、切换/回滚、安全风险和测试验收矩阵。
+    recorded_at: '2026-08-22T02:02:38+00:00'
+  - kind: verification
+    summary: 未修改生产代码、测试或 canonical 编排 YAML，未提交、未部署。
+    recorded_at: '2026-08-22T02:02:38+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills: []
+  required_action: null
+  confirmed_at: '2026-08-22T02:02:38+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+  host_action_baseline: null
+- id: to-tickets
+  skill: to-tickets
+  mcp: null
+  execution_mode: sub_agent
+  kind: skill
+  host_action: null
+  reference_mutation: false
+  skills:
+  - to-tickets
+  agent_prompt: null
+  orchestration_mode: null
+  evidence_policy: null
+  completion_gate:
+    id: ticket_evidence
+    require_evidence: true
+    require_output_files: false
+  confirmation_policy:
+    mode: none
+  status_transitions:
+    pending:
+    - in_progress
+    - blocked
+    - awaiting
+    - skipped
+    in_progress:
+    - complete
+    - blocked
+    - awaiting
+    - skipped
+    blocked:
+    - in_progress
+    - awaiting
+    awaiting:
+    - in_progress
+    - blocked
+    - skipped
+    complete: []
+    skipped: []
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  reference_topics:
+  - topic: delivery
+    index_path: delivery/index.yml
+    path: tickets
+    max_level: 3
+  - topic: orchestration
+    index_path: orchestration/index.yml
+    path: contracts
+    max_level: 3
+  reference_topics_snapshot:
+  - topic: delivery
+    index_path: delivery/index.yml
+    path: tickets
+    max_level: 3
+    index_sha256: f4c2a8b860a5b4ec52d4acf74e0ac225781930f709c91bae16cdb06666c8413f
+  - topic: orchestration
+    index_path: orchestration/index.yml
+    path: contracts
+    max_level: 3
+    index_sha256: 663062d9f9eb81b064472a178d93329d377d679d45ca8af2181155e7cf51b893
+  output_files:
+  - path: tickets/2026-08-22-wecom-dedicated-worker-tickets.md
+    sha256: 022d6bc46d2f710cfe7632670094ae4d8a5016f4d5d86f9828035f7787b3fa8b
+  handoff_summary: 已将独立 Worker 规格拆分为 6 张可验收票据：入口生命周期、租约/状态/多租户、流失败与 900 秒超时、Compose
+    拓扑、原子切换/回滚、测试与部署验收；01/02/03 可并行，04/05/06 逐级串行。
+  evidence:
+  - kind: verification
+    summary: to-tickets skill 文件已核验，SHA-256 与节点声明一致。
+    recorded_at: '2026-08-22T02:10:49+00:00'
+  - kind: verification
+    summary: 票据均包含目的、范围、依赖、验收、测试、风险和不做项，并明确并行/串行关系。
+    recorded_at: '2026-08-22T02:10:49+00:00'
+  - kind: verification
+    summary: 票据基于正式规格、设计决策和 local_search/non_gitnexus 调研记录生成。
+    recorded_at: '2026-08-22T02:10:49+00:00'
+  - kind: verification
+    summary: 未修改生产代码、测试或 canonical 编排 YAML，未提交、未部署。
+    recorded_at: '2026-08-22T02:10:49+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills: []
+  required_action: null
+  confirmed_at: '2026-08-22T02:10:49+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+  host_action_baseline: null
+- id: implement
+  skill: implement
+  mcp: null
+  execution_mode: main_agent
+  kind: skill
+  host_action: null
+  reference_mutation: false
+  skills:
+  - ponytail
+  - tdd
+  - implement
+  agent_prompt: 按 skills 列表顺序在同一上下文执行全部 Skill，任一未完成或阻塞不得交接。只运行当前需求相关测试及最小回归，不得扩大到无关全量；完成时提供测试命令、范围、退出码与跳过项证据；tdd
+    时不执行编译。
+  orchestration_mode: null
+  evidence_policy: null
+  completion_gate:
+    id: implementation_evidence
+    require_evidence: true
+    require_output_files: false
+  confirmation_policy:
+    mode: none
+  status_transitions:
+    pending:
+    - in_progress
+    - blocked
+    - awaiting
+    - skipped
+    in_progress:
+    - complete
+    - blocked
+    - awaiting
+    - skipped
+    blocked:
+    - in_progress
+    - awaiting
+    awaiting:
+    - in_progress
+    - blocked
+    - skipped
+    complete: []
+    skipped: []
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  reference_topics:
+  - topic: engineering
+    index_path: engineering/index.yml
+    path: .
+    max_level: 3
+  - topic: quality
+    index_path: quality/index.yml
+    path: .
+    max_level: 3
+  - topic: shared
+    index_path: shared/index.yml
+    path: .
+    max_level: 2
+  reference_topics_snapshot:
+  - topic: engineering
+    index_path: engineering/index.yml
+    path: .
+    max_level: 3
+    index_sha256: 171aba7e024cc63ab627ccf87b2e22b9f8a917ec770d1be7107ed8586249019b
+  - topic: quality
+    index_path: quality/index.yml
+    path: .
+    max_level: 3
+    index_sha256: f8953f00eb48139dd68e1c41a0368d7c0682d6356cd425caaf4c441341a532ca
+  - topic: shared
+    index_path: shared/index.yml
+    path: .
+    max_level: 2
+    index_sha256: c74404a5749e0556cc96f992aa282b8a16abbe903593bf845280c793c70be032
+  output_files:
+  - path: plans/wecom-dedicated-worker-implementation.md
+    sha256: 9792b7504acb1a4220c533244afb806437b0db23067713da7f2d5248626400be
+  handoff_summary: 已实现独立 WeCom Worker：新增 MODE=wecom_long_link 直启专用模块与 wecom_worker
+    Compose service；通用/Graph worker 关闭长连接；单副本、复用现有依赖、无迁移启动、进程健康检查、原子切换基础已落地。并保留 App
+    失败固定终止帧、原始错误日志和 900 秒超时修复。
+  evidence:
+  - kind: verification
+    summary: 新增独立 Worker 启动分支和 Compose service，设置 WECOM_LONG_LINK_ENABLED/MIGRATION_ENABLED、依赖、挂载、网络、restart
+      和进程健康检查。
+    recorded_at: '2026-08-22T02:26:09+00:00'
+  - kind: verification
+    summary: 通用 worker 显式关闭 WeCom，worker_graph 保持关闭；没有新增状态/租约 schema。
+    recorded_at: '2026-08-22T02:26:09+00:00'
+  - kind: verification
+    summary: App failure 通过同一 stream_id 的 finish=true 固定安全帧返回后保持连接；取消、断流和发送失败语义保持不变。
+    recorded_at: '2026-08-22T02:26:09+00:00'
+  - kind: verification
+    summary: 26 条反馈/runtime/protocol 回归测试通过；部署拓扑测试 2 条通过；Worker 同一测试夹具直接 asyncio 回归全部通过。
+    recorded_at: '2026-08-22T02:26:09+00:00'
+  - kind: verification
+    summary: py_compile、Ruff、bash -n、git diff --check 均通过；pytest 环境缺少 pytest-asyncio，未安装依赖。
+    recorded_at: '2026-08-22T02:26:09+00:00'
+  - kind: verification
+    summary: ponytail 技能在编排审计中不可用，已如实记录；未提交、未部署、未推送。
+    recorded_at: '2026-08-22T02:26:09+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills:
+  - ponytail
+  required_action: null
+  confirmed_at: '2026-08-22T02:26:09+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+  host_action_baseline: null
+- id: code-review
+  skill: code-review
+  mcp: null
+  execution_mode: main_agent
+  kind: skill
+  host_action: null
+  reference_mutation: false
+  skills:
+  - code-review
+  agent_prompt: 主 Agent 必须直接审核本次修改文件相对 HEAD 的未提交改动，以 git diff HEAD 为范围；无未提交差异时如实记录范围为空，不得猜测提交范围，不审查
+    HEAD^..HEAD。
+  orchestration_mode: null
+  evidence_policy: null
+  completion_gate:
+    id: review_evidence
+    require_evidence: true
+    require_output_files: false
+  confirmation_policy:
+    mode: none
+  status_transitions:
+    pending:
+    - in_progress
+    - blocked
+    - awaiting
+    - skipped
+    in_progress:
+    - complete
+    - blocked
+    - awaiting
+    - skipped
+    blocked:
+    - in_progress
+    - awaiting
+    awaiting:
+    - in_progress
+    - blocked
+    - skipped
+    complete: []
+    skipped: []
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  reference_topics:
+  - topic: quality
+    index_path: quality/index.yml
+    path: .
+    max_level: 3
+  - topic: delivery
+    index_path: delivery/index.yml
+    path: git
+    max_level: 3
+  - topic: shared
+    index_path: shared/index.yml
+    path: .
+    max_level: 2
+  reference_topics_snapshot:
+  - topic: quality
+    index_path: quality/index.yml
+    path: .
+    max_level: 3
+    index_sha256: f8953f00eb48139dd68e1c41a0368d7c0682d6356cd425caaf4c441341a532ca
+  - topic: delivery
+    index_path: delivery/index.yml
+    path: git
+    max_level: 3
+    index_sha256: f4c2a8b860a5b4ec52d4acf74e0ac225781930f709c91bae16cdb06666c8413f
+  - topic: shared
+    index_path: shared/index.yml
+    path: .
+    max_level: 2
+    index_sha256: c74404a5749e0556cc96f992aa282b8a16abbe903593bf845280c793c70be032
+  output_files:
+  - path: plans/wecom-dedicated-worker-code-review.md
+    sha256: aba9fc94aebbc7a1357a5dc5ad203e9aecfc1594cc442e68ac7411a07d0a9e7e
+  handoff_summary: 完成独立 Worker 代码审查：启动模式、Compose 拓扑、单副本状态复用、App 失败终止帧和 900 秒配置符合规格；未发现确认的
+    Standards/Spec 阻断问题。提交时必须隔离工作区既有无关改动。
+  evidence:
+  - kind: verification
+    summary: 已读取并核验 code-review skill；以当前 HEAD 为基线审查本任务文件。
+    recorded_at: '2026-08-22T02:31:23+00:00'
+  - kind: verification
+    summary: 已用 Ruff、py_compile、bash -n、git diff --check 和 PyYAML Compose 解析验证实现。
+    recorded_at: '2026-08-22T02:31:23+00:00'
+  - kind: verification
+    summary: 26 条反馈/runtime/protocol 测试、2 条部署拓扑测试和直接 asyncio Worker 回归检查通过。
+    recorded_at: '2026-08-22T02:31:23+00:00'
+  - kind: verification
+    summary: 审查确认 App 原始错误只进入日志、固定错误帧才发送；取消/断流/发送失败语义未被改变。
+    recorded_at: '2026-08-22T02:31:23+00:00'
+  - kind: verification
+    summary: 已记录 pytest-asyncio 缺失和未执行真实 Compose 重建的限制；未修改无关文件。
+    recorded_at: '2026-08-22T02:31:23+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills: []
+  required_action: null
+  confirmed_at: '2026-08-22T02:31:23+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+  host_action_baseline: null
+- id: verify
+  skill: verify
+  mcp: null
+  execution_mode: sub_agent
+  kind: skill
+  host_action: null
+  reference_mutation: false
+  skills:
+  - verify
+  agent_prompt: null
+  orchestration_mode: null
+  evidence_policy: null
+  completion_gate:
+    id: verification_evidence
+    require_evidence: true
+    require_output_files: false
+  confirmation_policy:
+    mode: none
+  status_transitions:
+    pending:
+    - in_progress
+    - blocked
+    - awaiting
+    - skipped
+    in_progress:
+    - complete
+    - blocked
+    - awaiting
+    - skipped
+    blocked:
+    - in_progress
+    - awaiting
+    awaiting:
+    - in_progress
+    - blocked
+    - skipped
+    complete: []
+    skipped: []
+  decision_record_path: null
+  inquiry_record_path: null
+  status: complete
+  required_files: []
+  reference_topics:
+  - topic: quality
+    index_path: quality/index.yml
+    path: .
+    max_level: 3
+  - topic: delivery
+    index_path: delivery/index.yml
+    path: .
+    max_level: 3
+  reference_topics_snapshot:
+  - topic: quality
+    index_path: quality/index.yml
+    path: .
+    max_level: 3
+    index_sha256: f8953f00eb48139dd68e1c41a0368d7c0682d6356cd425caaf4c441341a532ca
+  - topic: delivery
+    index_path: delivery/index.yml
+    path: .
+    max_level: 3
+    index_sha256: f4c2a8b860a5b4ec52d4acf74e0ac225781930f709c91bae16cdb06666c8413f
+  output_files:
+  - path: plans/wecom-dedicated-worker-verification.md
+    sha256: 326796bad43542e866da31e6569f11608eed4bb821d7b217453a657415b65931
+  handoff_summary: 独立 Worker 实现验证通过：入口分支、Compose 拓扑、App failure 终止帧、保持连接、processing
+    状态重置和原有取消/断流语义均通过；静态检查和 26 条回归测试通过。未执行真实 Compose 重建/部署。
+  evidence: &id001
+  - kind: verification
+    summary: 指定 pytest 回归结果：26 passed，覆盖 deployment、feedback、runtime、protocol。
+    recorded_at: '2026-08-22T02:58:35+00:00'
+  - kind: verification
+    summary: 直接 asyncio harness 覆盖 Worker 正常流、App failure、timer、发送失败、cancel，全部通过；直接
+      client harness 确认 App failure 后 completed=0、reply_sent=0、processing reset。
+    recorded_at: '2026-08-22T02:58:35+00:00'
+  - kind: verification
+    summary: 入口黑盒分支验证、PyYAML Compose 解析、py_compile、Ruff、bash -n 和 git diff --check
+      全部通过。
+    recorded_at: '2026-08-22T02:58:35+00:00'
+  - kind: verification
+    summary: 验证阶段发现并修复错误状态迁移：App failure 终止帧发送后 callback 返回 None，不再被客户端标记为成功完成。
+    recorded_at: '2026-08-22T02:58:35+00:00'
+  - kind: verification
+    summary: verify skill 文件缺失；pytest-asyncio 缺失，已如实记录并使用直接 asyncio harness；未修改无关文件，未部署。
+    recorded_at: '2026-08-22T02:58:35+00:00'
+  blocked_reason: null
+  failure_evidence: []
+  skip_reason: null
+  skip_basis: null
+  initially_unavailable_skills:
+  - verify
+  required_action: null
+  confirmed_at: '2026-08-22T02:58:35+00:00'
+  confirmation_request: null
+  answer_confirmation_request: null
+  question_choice_request: null
+  question_choices: []
+  authorizations: []
+  answer_confirmations: []
+  host_action_baseline: null
+current_stage: verify
+current_skill: verify
+stage_status: complete
+next_skill: null
+resume_from: completed
+continuation_mode: auto
+required_action: null
+handoff_summary: 阶段 verify 已完成，任务编排中的全部阶段已结束。
+evidence: *id001
+blocked_reason: null
+failure_evidence: []
+invalidated_outputs: []
+limits:
+  handoff_summary_max_chars: 1200
+  evidence_summary_max_chars: 500
+  max_inline_evidence_items: 20
+updated_at: '2026-08-22T02:58:41+00:00'
+initialization:
+  selection_id: mcJDZlvvdiJlqrJPpn82dw
+  purpose: init
+  selection_stage: final
+  chosen_at: '2026-08-22T01:06:14+00:00'
+  definition:
+    path: D:\workplace\skills\my-skills\dev-spec-gen\references\flow-catalog.yml
+    sha256: 9cd88b3a115cb04b217a56bb57d430cc54c3df6788f8d5516aa862d3bd554f82
+  stages_sha256: 04db5d5a710c76a39c72ea10a875bc4d5c4c946bdb60a05746ac42282ed6df64
+  flow_definition_sha256: bfe86b0010f89d6782ab9c1e057c5b4234e6876d90ab55011dc370d87eb545d7
+  provenance: cli_selection

@@ -7,11 +7,10 @@ import threading
 
 from sqlalchemy import select
 
-from app_factory import create_app
 from models.account import Tenant
 from models.engine import db
 
-from .app_router import WeComAppRouter
+from .app_router import APP_STREAM_ERROR_MESSAGE, WeComAppRouter, WeComAppStreamError
 from .client import WeComOutboundClient
 from .feedback import FeedbackCoordinator, FeedbackFrame
 from .provider import build_config_provider
@@ -53,6 +52,7 @@ async def _run_tenant(tenant_id: str) -> None:
         timer_task = None
         stop_event = threading.Event()
         cancel_event = asyncio.Event()
+        send_failed = False
         try:
             event_stream_holder: dict[str, object] = {}
             router = WeComAppRouter()
@@ -75,21 +75,24 @@ async def _run_tenant(tenant_id: str) -> None:
                 cancel_event.set()
 
             def enqueue_frame(frame: FeedbackFrame) -> None:
-                if stop_event.is_set() or cancel_event.is_set():
+                nonlocal send_failed
+                if (stop_event.is_set() or cancel_event.is_set()) and not frame.finish:
                     return
                 try:
                     frames.put_nowait(frame)
                 except asyncio.QueueFull:
+                    send_failed = True
                     stop_producer()
                     loop.call_soon_threadsafe(events.put_nowait, RuntimeError("feedback frame queue is full"))
 
             async def send_frames() -> None:
+                nonlocal send_failed
                 while True:
                     frame = await frames.get()
                     try:
                         if frame is None:
                             return
-                        if cancel_event.is_set() or stop_event.is_set():
+                        if (cancel_event.is_set() or stop_event.is_set()) and not frame.finish:
                             continue
                         await protocol.respond_stream(
                             message,
@@ -99,6 +102,7 @@ async def _run_tenant(tenant_id: str) -> None:
                         )
                     except BaseException as exc:
                         if not isinstance(exc, asyncio.CancelledError):
+                            send_failed = True
                             stop_producer()
                             coordinator.on_cancelled()
                             await discard_frames()
@@ -122,6 +126,20 @@ async def _run_tenant(tenant_id: str) -> None:
 
             timer_task = asyncio.create_task(refresh_feedback())
 
+            async def send_app_failure_frame() -> bool:
+                if send_failed or (feedback_task and feedback_task.done()):
+                    return False
+                cancel_event.set()
+                stop_event.set()
+                if timer_task and not timer_task.done():
+                    timer_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await timer_task
+                await discard_frames()
+                coordinator.on_failed(APP_STREAM_ERROR_MESSAGE)
+                await frames.join()
+                return not send_failed
+
             def stream_events() -> None:
                 try:
                     event_stream = router.stream_reply(
@@ -137,6 +155,15 @@ async def _run_tenant(tenant_id: str) -> None:
                             event_stream.close()
                             return
                         loop.call_soon_threadsafe(events.put_nowait, event)
+                except WeComAppStreamError as exc:
+                    if not stop_event.is_set():
+                        loop.call_soon_threadsafe(events.put_nowait, exc)
+                except Exception as exc:
+                    if not stop_event.is_set():
+                        loop.call_soon_threadsafe(
+                            events.put_nowait,
+                            WeComAppStreamError(str(exc) or type(exc).__name__),
+                        )
                 except BaseException as exc:
                     if not stop_event.is_set():
                         loop.call_soon_threadsafe(events.put_nowait, exc)
@@ -166,6 +193,33 @@ async def _run_tenant(tenant_id: str) -> None:
             if feedback_task:
                 frames.put_nowait(None)
                 await feedback_task
+        except WeComAppStreamError as exc:
+            failure_frame_sent = False
+            try:
+                failure_frame_sent = await send_app_failure_frame()
+            except Exception:
+                logger.exception(
+                    "WeCom app failure frame could not be sent tenant=%s bot=%s msgid=%s app=%s",
+                    tenant_id,
+                    message.bot_id,
+                    message.message_id,
+                    config.app_id,
+                )
+            logger.warning(
+                "WeCom long-link app stream failed tenant=%s bot=%s msgid=%s app=%s "
+                "error_code=%s error_status=%s error_detail=%s",
+                tenant_id,
+                message.bot_id,
+                message.message_id,
+                config.app_id,
+                exc.code,
+                exc.status,
+                exc.detail,
+                exc_info=True,
+            )
+            if failure_frame_sent:
+                return
+            raise
         except asyncio.CancelledError:
             cancel_event.set()
             coordinator.on_cancelled()
@@ -174,12 +228,15 @@ async def _run_tenant(tenant_id: str) -> None:
             cancel_event.set()
             coordinator.on_cancelled()
             logger.warning(
-                "WeCom long-link app reply failed tenant=%s bot=%s msgid=%s app=%s error_type=%s",
+                "WeCom long-link app reply failed tenant=%s bot=%s msgid=%s app=%s "
+                "error_type=%s error_detail=%s",
                 tenant_id,
                 message.bot_id,
                 message.message_id,
                 config.app_id,
                 type(exc).__name__,
+                str(exc),
+                exc_info=True,
             )
             raise
         finally:
@@ -227,6 +284,8 @@ async def _run_tenant(tenant_id: str) -> None:
 
 
 async def run() -> None:
+    from app_factory import create_app
+
     flask_app = create_app()[1]
     with flask_app.app_context():
         await asyncio.gather(*(_run_tenant(tenant_id) for tenant_id in _tenant_ids()))

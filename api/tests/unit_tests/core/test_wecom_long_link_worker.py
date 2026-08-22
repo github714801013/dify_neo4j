@@ -106,6 +106,29 @@ async def test_worker_reads_stream_sends_frames_and_closes_stream(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_worker_sends_terminal_frame_after_app_stream_failure(monkeypatch):
+    def failed_events():
+        yield SimpleNamespace(kind="node_finished", node_title="节点", content="节点…")
+        raise RuntimeError("upstream stream failed")
+
+    router = _Router(failed_events())
+    protocol = _Protocol()
+    task, callback = await _start_callback(monkeypatch, router)
+
+    try:
+        result = await callback(_message(), protocol, "stream")
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert result is None
+    assert sum(finish for _, finish in protocol.frames) == 1
+    assert all(not finish for _, finish in protocol.frames[:-1])
+    assert router.stream.closed
+
+
+@pytest.mark.asyncio
 async def test_worker_stops_timer_after_stream_finishes(monkeypatch):
     router = _Router([SimpleNamespace(kind="final", content="答案")])
     protocol = _Protocol()

@@ -18,7 +18,10 @@ if [[ "${MIGRATION_ENABLED}" == "true" ]]; then
   fi
 fi
 
-if [[ "${MODE}" == "worker" ]]; then
+if [[ "${MODE}" == "wecom_long_link" ]]; then
+  exec python -m core.wecom_long_link.worker
+
+elif [[ "${MODE}" == "worker" ]]; then
 
   # Get the number of available CPU cores
   if [ "${CELERY_AUTO_SCALE,,}" = "true" ]; then

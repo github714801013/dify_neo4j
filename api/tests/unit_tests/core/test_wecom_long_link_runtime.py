@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.wecom_long_link.app_router import WeComAppRouter
+from core.wecom_long_link.app_router import WeComAppRouter, WeComAppStreamError
 from core.wecom_long_link.config import WeComBotConfig
 from core.wecom_long_link.reconciler import WeComConfigReconciler
 from models.model import AppMode
@@ -66,6 +66,46 @@ def test_reconciler_stops_disabled_client() -> None:
         await reconciler.stop()
 
     asyncio.run(run())
+
+
+def test_app_router_preserves_structured_stream_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, _model, _app_id):
+            return SimpleNamespace(tenant_id="tenant-1", mode=AppMode.CHAT)
+
+    def error_stream():
+        yield {
+            "event": "error",
+            "code": "invalid_param",
+            "status": 400,
+            "message": "read llm model failed: internal connection closed",
+        }
+
+    monkeypatch.setattr("core.wecom_long_link.app_router.create_session", lambda: Session())
+    monkeypatch.setattr(
+        "core.wecom_long_link.app_router.PluginAppBackwardsInvocation.invoke_app",
+        lambda **kwargs: error_stream(),
+    )
+
+    with pytest.raises(WeComAppStreamError) as exc_info:
+        list(
+            WeComAppRouter().stream_reply(
+                tenant_id="tenant-1",
+                app_id="app-1",
+                user_id="user-1",
+                query="hello",
+            )
+        )
+
+    assert exc_info.value.detail == "read llm model failed: internal connection closed"
+    assert exc_info.value.code == "invalid_param"
+    assert exc_info.value.status == 400
 
 
 def test_app_router_creates_safe_node_summary() -> None:

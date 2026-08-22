@@ -58,6 +58,7 @@ NEO4J_USERNAME="${NEO4J_USERNAME:-}"
 NEO4J_PASSWORD="${NEO4J_PASSWORD:-}"
 NEO4J_DATABASE="${NEO4J_DATABASE:-}"
 GRAPH_INDEX_WORKER_CONCURRENCY="${GRAPH_INDEX_WORKER_CONCURRENCY:-2}"
+GRAPH_INDEX_CELERY_WORKER_CONCURRENCY="${GRAPH_INDEX_CELERY_WORKER_CONCURRENCY:-1}"
 GRAPH_INDEX_MAX_RETRIES="${GRAPH_INDEX_MAX_RETRIES:-5}"
 GRAPH_INDEX_RETRY_BASE_SECONDS="${GRAPH_INDEX_RETRY_BASE_SECONDS:-30}"
 GRAPH_RECONCILE_INTERVAL_MINUTES="${GRAPH_RECONCILE_INTERVAL_MINUTES:-30}"
@@ -177,6 +178,7 @@ write_runtime_env_file() {
 
   cat >"${file}" <<EOF
 SECRET_KEY=${SECRET_KEY}
+WECOM_LONG_LINK_ENABLED=${WECOM_LONG_LINK_ENABLED:-false}
 DEPLOY_ENV=${DEPLOY_ENV:-PRODUCTION}
 EDITION=${EDITION:-SELF_HOSTED}
 DB_TYPE=oceanbase
@@ -192,7 +194,7 @@ SQLALCHEMY_POOL_RECYCLE=${SQLALCHEMY_POOL_RECYCLE:-3600}
 SQLALCHEMY_POOL_PRE_PING=${SQLALCHEMY_POOL_PRE_PING:-false}
 SERVER_WORKER_AMOUNT=${SERVER_WORKER_AMOUNT:-1}
 SERVER_WORKER_CONNECTIONS=${SERVER_WORKER_CONNECTIONS:-10}
-GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-200}
+GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-900}
 APP_MAX_EXECUTION_TIME=${APP_MAX_EXECUTION_TIME}
 WORKFLOW_MAX_EXECUTION_TIME=${WORKFLOW_MAX_EXECUTION_TIME}
 GRAPH_RAG_ENABLED=${GRAPH_RAG_ENABLED}
@@ -203,6 +205,7 @@ NEO4J_USERNAME=${NEO4J_USERNAME}
 NEO4J_PASSWORD=${NEO4J_PASSWORD}
 NEO4J_DATABASE=${NEO4J_DATABASE}
 GRAPH_INDEX_WORKER_CONCURRENCY=${GRAPH_INDEX_WORKER_CONCURRENCY}
+GRAPH_INDEX_CELERY_WORKER_CONCURRENCY=${GRAPH_INDEX_CELERY_WORKER_CONCURRENCY}
 GRAPH_INDEX_MAX_RETRIES=${GRAPH_INDEX_MAX_RETRIES}
 GRAPH_INDEX_RETRY_BASE_SECONDS=${GRAPH_INDEX_RETRY_BASE_SECONDS}
 GRAPH_RECONCILE_INTERVAL_MINUTES=${GRAPH_RECONCILE_INTERVAL_MINUTES}
@@ -312,6 +315,50 @@ services:
     env_file: [./.env]
     environment:
       MODE: worker
+      WECOM_LONG_LINK_ENABLED: "false"
+      INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
+      CELERY_WORKER_CONCURRENCY: ${CELERY_WORKER_AMOUNT:-4}
+      CELERY_WORKER_QUEUES: api_token,dataset,dataset_summary,priority_dataset,priority_pipeline,pipeline,mail,ops_trace,app_deletion,plugin,workflow_storage,conversation,workflow,schedule_poller,schedule_executor,triggered_workflow_dispatcher,trigger_refresh_publisher,trigger_refresh_executor,retention,workflow_based_app_execution
+    depends_on:
+      init_permissions:
+        condition: service_completed_successfully
+      sandbox:
+        condition: service_started
+      plugin_daemon:
+        condition: service_started
+    volumes:
+      - ./volumes/app/storage:/app/api/storage
+    networks: [default, ssrf_proxy_network]
+
+  worker_graph:
+    image: dify-origin-api:__IMAGE_TAG__
+    restart: always
+    env_file: [./.env]
+    environment:
+      MODE: worker
+      WECOM_LONG_LINK_ENABLED: "false"
+      INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
+      CELERY_WORKER_CONCURRENCY: ${GRAPH_INDEX_CELERY_WORKER_CONCURRENCY:-1}
+      CELERY_WORKER_QUEUES: graph_index
+    depends_on:
+      init_permissions:
+        condition: service_completed_successfully
+      sandbox:
+        condition: service_started
+      plugin_daemon:
+        condition: service_started
+    volumes:
+      - ./volumes/app/storage:/app/api/storage
+    networks: [default, ssrf_proxy_network]
+
+  wecom_worker:
+    image: dify-origin-api:__IMAGE_TAG__
+    restart: always
+    env_file: [./.env]
+    environment:
+      MODE: wecom_long_link
+      WECOM_LONG_LINK_ENABLED: "true"
+      MIGRATION_ENABLED: "false"
       INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
     depends_on:
       init_permissions:
@@ -323,6 +370,12 @@ services:
     volumes:
       - ./volumes/app/storage:/app/api/storage
     networks: [default, ssrf_proxy_network]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os,sys; p=os.getpid(); sys.exit(0 if any(x.isdigit() and int(x)!=p and 'core.wecom_long_link.worker' in open('/proc/'+x+'/cmdline','rb').read().decode(errors='ignore') for x in os.listdir('/proc')) else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   worker_beat:
     image: dify-origin-api:__IMAGE_TAG__
@@ -339,6 +392,8 @@ services:
     image: dify-origin-web:__IMAGE_TAG__
     restart: always
     env_file: [./.env]
+    environment:
+      HOSTNAME: 0.0.0.0
     ports:
       - "${EXPOSE_WEB_PORT:-3000}:3000"
     depends_on:
@@ -471,6 +526,9 @@ main() {
   sync_remote_files
   scp "${LOCAL_IMAGE_TAR}" "${REMOTE}:${REMOTE_IMAGE_TAR}"
   ssh "${REMOTE}" "docker load -i '${REMOTE_IMAGE_TAR}'"
+  # 以一次性任务方式执行迁移，再启动应用服务。
+  # 避免新版本容器在迁移前查询尚未创建的数据库字段。
+  ssh "${REMOTE}" "cd '${REMOTE_DIR}/docker' && docker compose -f docker-compose.origin.yaml run --rm --no-deps -e MODE=job api upgrade-db"
   ssh "${REMOTE}" "cd '${REMOTE_DIR}/docker' && docker compose -f docker-compose.origin.yaml up -d"
   ssh "${REMOTE}" "cd '${REMOTE_DIR}/docker' && docker compose -f docker-compose.origin.yaml ps"
   ssh "${REMOTE}" "curl -fsS http://127.0.0.1:5001/health || true"

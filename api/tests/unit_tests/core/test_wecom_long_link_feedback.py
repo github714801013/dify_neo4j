@@ -92,6 +92,26 @@ def test_feedback_coordinator_appends_answer_chunks_and_finishes_once() -> None:
     ]
 
 
+def test_feedback_coordinator_finishes_once_after_app_failure() -> None:
+    clock = FakeClock()
+    frames: list[FeedbackFrame] = []
+    coordinator = FeedbackCoordinator(stream_id="stream-1", send=frames.append, clock=clock)
+
+    coordinator.on_node_change("节点")
+    coordinator.on_answer_chunk("部分答案")
+    coordinator.on_failed("服务暂时不可用，请稍后重试。错误码：APP_STREAM_ERROR")
+    coordinator.on_failed("另一个错误")
+    clock.advance(10)
+    coordinator.advance()
+
+    assert frames == [
+        FeedbackFrame("stream-1", "节点…｜已用 0 秒", False),
+        FeedbackFrame("stream-1", "部分答案", False),
+        FeedbackFrame("stream-1", "服务暂时不可用，请稍后重试。错误码：APP_STREAM_ERROR", True),
+    ]
+    assert sum(frame.finish for frame in frames) == 1
+
+
 def test_feedback_coordinator_throttles_answer_chunks_and_flushes_pending_text() -> None:
     clock = FakeClock()
     frames: list[FeedbackFrame] = []

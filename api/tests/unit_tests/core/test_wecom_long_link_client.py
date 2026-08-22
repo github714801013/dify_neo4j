@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,8 @@ class _Store:
     def __init__(self, *, renew_result=True):
         self.renew_result = renew_result
         self.reset_calls = 0
+        self.completed = []
+        self.reply_sent_calls = 0
 
     def acquire(self, key, owner, ttl):
         return True
@@ -33,10 +36,10 @@ class _Store:
         self.reset_calls += 1
 
     def mark_completed(self, key, content):
-        return None
+        self.completed.append((key, content))
 
     def mark_reply_sent(self, key):
-        return None
+        self.reply_sent_calls += 1
 
 
 class _Protocol:
@@ -64,9 +67,65 @@ class _Protocol:
         self.closed.set()
 
 
+class _MessageProtocol(_Protocol):
+    def __init__(self):
+        super().__init__()
+        self.received = False
+
+    async def receive_message(self):
+        if not self.received:
+            self.received = True
+            return SimpleNamespace(
+                message_id="msg",
+                bot_id="bot",
+                user_id="user",
+                text="hello",
+                chat_id=None,
+                message_type="text",
+            )
+        await asyncio.Event().wait()
+
+
 @pytest.fixture
 def config():
     return WeComBotConfig("tenant", "instance", "bot", "secret", "app", True, "v1")
+
+
+def test_client_resets_processing_after_handled_app_failure(config):
+    async def run():
+        protocol = _MessageProtocol()
+        store = _Store()
+
+        async def socket_factory(_):
+            return object()
+
+        client = WeComOutboundClient(config, socket_factory=socket_factory, state_store=store)
+        import core.wecom_long_link.client as client_module
+
+        original_protocol = client_module.WeComWebSocketProtocol
+        client_module.WeComWebSocketProtocol = lambda **kwargs: protocol
+        client._renew_lease = lambda key, owner, stop: asyncio.sleep(3600)
+
+        async def on_message(*args):
+            return None
+
+        try:
+            task = asyncio.create_task(client.run(on_message=on_message))
+            await asyncio.wait_for(_wait_for_reset(store), timeout=1)
+            assert store.completed == []
+            assert store.reply_sent_calls == 0
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            client_module.WeComWebSocketProtocol = original_protocol
+
+    asyncio.run(run())
+
+
+async def _wait_for_reset(store: _Store) -> None:
+    while store.reset_calls == 0:
+        await asyncio.sleep(0)
 
 
 def test_client_resets_processing_and_closes_protocol_when_lease_renewal_fails(config):
